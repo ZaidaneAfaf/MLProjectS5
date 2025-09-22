@@ -1,33 +1,57 @@
-# train.py
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
-import joblib
+import pickle
+import os
 
-# 1. Chargement des données
-iris = pd.read_csv("Iris.csv")
+def main():
+    print("🌸 Starting Iris ML Training...")
+    
+    # Chargement des données
+    print("📊 Loading dataset...")
+    df = pd.read_csv('Iris.csv')
+    
+    # Préparation des données
+    X = df.drop(['Species'], axis=1)
+    y = df['Species']
+    
+    # Division train/test
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+    
+    # Entraînement
+    print("🤖 Training model...")
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # Évaluation
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    print(f"✅ Accuracy of the model: {accuracy:.2f}")
+    
+    # Sauvegarde du modèle
+    os.makedirs('artifacts', exist_ok=True)
+    model_path = 'artifacts/iris_model.pkl'
+    
+    with open(model_path, 'wb') as f:
+        pickle.dump(model, f)
+    
+    print(f"💾 Model saved as {model_path}")
+    
+    # Sauvegarde des métriques
+    metrics = {
+        'accuracy': accuracy,
+        'model_type': 'RandomForestClassifier',
+        'features': list(X.columns)
+    }
+    
+    with open('artifacts/metrics.pkl', 'wb') as f:
+        pickle.dump(metrics, f)
+    
+    print("📈 Metrics saved!")
+    return accuracy
 
-# 2. Supprimer la colonne Id (inutile si elle existe)
-if "Id" in iris.columns:
-    iris.drop("Id", axis=1, inplace=True)
-
-# 3. Préparation X et y
-X = iris[['SepalLengthCm','SepalWidthCm','PetalLengthCm','PetalWidthCm']]
-y = iris['Species']
-
-# 4. Split train/test
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-
-# 5. Entraînement du modèle
-model = SVC()
-model.fit(X_train, y_train)
-
-# 6. Prédiction et évaluation
-y_pred = model.predict(X_test)
-accuracy = accuracy_score(y_test, y_pred)
-print(f"✅ Accuracy of the model: {accuracy:.2f}")
-
-# 7. Sauvegarde du modèle
-joblib.dump(model, "iris_model.pkl")
-print("💾 Model saved as iris_model.pkl")
+if __name__ == "__main__":
+    main()
