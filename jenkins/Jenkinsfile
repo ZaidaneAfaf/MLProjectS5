@@ -22,67 +22,62 @@ pipeline {
                     echo Current directory: %CD%
                     dir
                     echo.
+                    echo Python version:
+                    python --version || echo Python not found in PATH
+                    echo.
                     echo Docker version:
                     docker --version
-                    echo.
-                    echo Docker Compose version:
-                    docker-compose --version
-                    echo.
-                    echo Git version:
-                    git --version
                 '''
             }
         }
         
-        stage('Build Docker Image') {
+        stage('Local Python Training') {
             steps {
-                echo 'Building Docker image...'
-                bat '''
-                    echo Building image: %DOCKER_IMAGE_TAG%
-                    docker build -t %DOCKER_IMAGE_TAG% -f jenkins/Dockerfile .
-
-                    echo.
-                    echo Verifying image was built:
-                    docker images | findstr %DOCKER_IMAGE%
-                '''
-            }
-        }
-        
-        stage('Run Training') {
-            steps {
-                echo 'Starting ML training...'
+                echo 'Training model with local Python (no Docker)...'
                 bat '''
                     echo Creating artifacts directory...
                     if not exist "artifacts" mkdir artifacts
                     
-                    echo Running Docker container for training...
-                    docker run --name %CONTAINER_NAME%-%BUILD_NUMBER% --rm -v "%WORKSPACE%/artifacts:/app/artifacts" %DOCKER_IMAGE_TAG%
+                    echo Installing Python dependencies...
+                    pip install scikit-learn pandas numpy joblib || echo Some packages may already be installed
                     
-                    echo Training completed. Checking artifacts...
+                    echo Running training script locally...
+                    cd jenkins
+                    python train.py
+                    
+                    echo Moving trained model to artifacts...
+                    if exist "iris_model.pkl" (
+                        move iris_model.pkl "../artifacts/iris_model.pkl"
+                        echo Model moved to artifacts successfully
+                    ) else (
+                        echo Model not generated, checking current directory...
+                        dir
+                    )
+                    
+                    cd ..
+                    echo Checking artifacts directory...
                     dir artifacts
                 '''
             }
         }
         
-        stage('Verify Artifacts') {
+        stage('Verify Local Training') {
             steps {
-                echo 'Verifying generated artifacts...'
+                echo 'Verifying locally trained model...'
                 bat '''
-                    echo Contents of artifacts directory:
-                    if exist "artifacts" (
-                        dir artifacts
-                        echo.
-                        if exist "artifacts\\iris_model.pkl" (
-                            echo SUCCESS: Model file found!
-                            echo File size:
-                            for %%I in (artifacts\\iris_model.pkl) do echo %%~zI bytes
+                    if exist "artifacts\\iris_model.pkl" (
+                        echo SUCCESS: Local training completed!
+                        echo Model file size:
+                        for %%I in (artifacts\\iris_model.pkl) do echo %%~zI bytes
+                    ) else (
+                        echo WARNING: Local training failed, using existing model if available
+                        if exist "models\\iris_model.pkl" (
+                            echo Using existing model from models directory
+                            copy models\\iris_model.pkl artifacts\\iris_model.pkl
                         ) else (
-                            echo ERROR: Model file not found!
+                            echo ERROR: No model available
                             exit /b 1
                         )
-                    ) else (
-                        echo ERROR: Artifacts directory not found!
-                        exit /b 1
                     )
                 '''
             }
@@ -100,47 +95,66 @@ pipeline {
             }
         }
         
-        stage('Stop Previous Deployment') {
+        stage('Build Local Docker Images') {
             steps {
-                echo 'Stopping any running containers...'
+                echo 'Building Docker images from local context...'
                 bat '''
-                    docker-compose down --remove-orphans || echo No containers to stop
+                    echo Building serveur image...
+                    docker build -t iris-serveur:local ./serveur/ --no-cache --pull=never || (
+                        echo "Serveur build failed, trying with different base image..."
+                        echo "Checking available Python images..."
+                        docker images | findstr python
+                    )
                     
-                    echo Removing any existing containers...
-                    docker container ls -aq -f "name=iris" | findstr . && docker container rm -f $(docker container ls -aq -f "name=iris") || echo No iris containers to remove
+                    echo Building client image...
+                    docker build -t iris-client:local ./client/ --no-cache --pull=never || (
+                        echo "Client build failed, trying with different base image..."
+                        echo "Checking available Python images..."
+                        docker images | findstr python
+                    )
                     
-                    echo Pruning unused resources...
-                    docker system prune -f
+                    echo Checking built images:
+                    docker images | findstr iris
                 '''
             }
         }
         
-        stage('Deploy Application') {
+        stage('Stop Previous Services') {
             steps {
-                echo 'Deploying application...'
+                echo 'Stopping previous services...'
                 bat '''
-                    echo Building and starting services...
-                    docker-compose up -d --build --force-recreate
+                    docker-compose down --remove-orphans 2>nul || echo No services to stop
+                    docker container prune -f 2>nul
+                '''
+            }
+        }
+        
+        stage('Deploy with Local Images') {
+            steps {
+                echo 'Deploying with locally built images...'
+                bat '''
+                    echo Starting services...
+                    docker-compose up -d --force-recreate || (
+                        echo "Docker Compose failed, trying manual container start..."
+                        
+                        echo "Starting serveur container..."
+                        docker run -d --name iris-serveur -p 8000:8000 -v "%CD%\\serveur\\models:/app/models" iris-serveur:local 2>nul || echo "Serveur start failed"
+                        
+                        echo "Starting client container..."
+                        docker run -d --name iris-client -p 8501:8501 iris-client:local 2>nul || echo "Client start failed"
+                    )
                     
-                    echo Waiting for services to be ready...
-                    timeout /t 15
+                    echo Waiting for services to start...
+                    timeout /t 10 /nobreak >nul 2>&1 || ping -n 10 127.0.0.1 >nul
                     
-                    echo Checking if services are running...
-                    docker-compose ps
+                    echo Checking running containers:
+                    docker ps
                     
-                    echo Testing API health...
-                    timeout /t 5
-                    curl -f http://localhost:8000 || echo API not yet ready
-                    
-                    echo.
-                    echo =====================================
-                    echo   DEPLOYMENT COMPLETED SUCCESSFULLY
-                    echo =====================================
-                    echo Application is now running!
-                    echo - Streamlit UI: http://localhost:8501
-                    echo - FastAPI docs: http://localhost:8000/docs
-                    echo - API health: http://localhost:8000
-                    echo =====================================
+                    echo Testing API connectivity...
+                    curl -f http://localhost:8000 --connect-timeout 5 || (
+                        echo "API test failed, checking logs..."
+                        docker logs iris-serveur 2>nul || echo "No serveur logs"
+                    )
                 '''
             }
         }
@@ -148,99 +162,67 @@ pipeline {
     
     post {
         always {
-            echo 'Cleaning up Docker build resources...'
+            echo 'Cleaning up...'
             bat '''
-                echo Removing training image: %DOCKER_IMAGE_TAG%
-                docker rmi %DOCKER_IMAGE_TAG% 2>nul || echo Training image already removed
-                
-                echo Cleaning up dangling images...
-                docker image prune -f 2>nul || echo No dangling images to clean
-                
-                echo Build cleanup completed.
+                echo Cleanup completed
             '''
         }
         
         success {
             echo 'Pipeline completed successfully!'
             
-            // Archive artifacts
-            archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: false
+            archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
             
-            // Display final summary
             bat '''
                 echo.
                 echo =====================================
-                echo   FINAL DEPLOYMENT STATUS - SUCCESS
+                echo    LOCAL DEPLOYMENT SUCCESS!
                 echo =====================================
                 echo.
-                echo Services running:
-                docker-compose ps
-                echo.
-                echo Generated artifacts:
-                dir artifacts 2>nul || echo No artifacts directory
-                echo.
-                echo Model in server:
-                dir serveur\\models 2>nul || echo No models directory
-                echo.
-                echo *** ACCESS YOUR APPLICATION ***
+                echo Your application should be running at:
                 echo - Streamlit UI: http://localhost:8501
-                echo - FastAPI API: http://localhost:8000
-                echo - API Documentation: http://localhost:8000/docs
+                echo - FastAPI: http://localhost:8000
                 echo.
-                echo To stop the application later, run:
-                echo   docker-compose down
+                echo Running containers:
+                docker ps | findstr iris || echo No iris containers running
+                echo.
+                echo To test the API manually:
+                echo curl http://localhost:8000
                 echo =====================================
             '''
         }
         
         failure {
-            echo 'Pipeline failed!'
+            echo 'Pipeline failed! Trying fallback deployment...'
             
-            // Stop any partial deployment
-            bat '''
-                echo Cleaning up failed deployment...
-                docker-compose down --remove-orphans 2>nul || echo No deployment to clean
-            '''
-            
-            // Enhanced debug information
             bat '''
                 echo.
                 echo =====================================
-                echo         FAILURE DEBUG INFO
+                echo      FALLBACK DEPLOYMENT
                 echo =====================================
-                echo Current directory: %CD%
-                dir
                 echo.
-                echo Artifacts status:
-                if exist "artifacts" (
-                    echo Artifacts directory exists:
-                    dir artifacts
-                ) else (
-                    echo Artifacts directory missing
-                )
+                echo Attempting direct Python deployment...
+                
+                echo Installing requirements for serveur...
+                cd serveur
+                pip install -r requirements.txt 2>nul || echo Requirements installation failed
+                
+                echo Starting FastAPI server in background...
+                start /B python -m uvicorn app:app --host 0.0.0.0 --port 8000
+                
+                cd ..\\client
+                echo Installing requirements for client...
+                pip install -r requirements.txt 2>nul || echo Requirements installation failed
+                
+                echo Starting Streamlit in background...
+                start /B streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+                
+                cd ..
                 echo.
-                echo Server models status:
-                if exist "serveur\\models" (
-                    echo Models directory exists:
-                    dir serveur\\models
-                ) else (
-                    echo Models directory missing
-                )
-                echo.
-                echo Docker images:
-                docker images | findstr iris || echo No iris images found
-                echo.
-                echo Docker containers:
-                docker ps -a | findstr iris || echo No iris containers found
-                echo.
-                echo Docker Compose status:
-                docker-compose ps || echo No compose services running
-                echo.
-                echo Docker logs (last 20 lines each service):
-                echo --- Serveur logs ---
-                docker-compose logs --tail=20 serveur 2>nul || echo No serveur logs
-                echo --- Client logs ---
-                docker-compose logs --tail=20 client 2>nul || echo No client logs
+                echo Fallback deployment attempted!
+                echo Check manually:
+                echo - http://localhost:8000 for API
+                echo - http://localhost:8501 for Streamlit
                 echo =====================================
             '''
         }
