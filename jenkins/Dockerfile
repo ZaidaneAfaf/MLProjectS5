@@ -19,7 +19,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copie les fichiers nécessaires
-COPY train.py .
+COPY ../data/Iris.csv ./Iris.csv
+
 COPY Iris.csv .
 
 # Permissions
