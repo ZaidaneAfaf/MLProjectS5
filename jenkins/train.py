@@ -6,7 +6,7 @@ import pickle
 import os
 
 def main():
-    print("🌸 Starting Iris ML Training...")
+    print(" Starting Iris ML Training...")
     
     # Chargement des données
     print("📊 Loading dataset...")
@@ -22,7 +22,7 @@ def main():
     )
     
     # Entraînement
-    print("🤖 Training model...")
+    print(" Training model...")
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     
@@ -38,7 +38,7 @@ def main():
     with open(model_path, 'wb') as f:
         pickle.dump(model, f)
     
-    print(f"💾 Model saved as {model_path}")
+    print(f" Model saved as {model_path}")
     
     # Sauvegarde des métriques
     metrics = {
@@ -50,7 +50,7 @@ def main():
     with open('artifacts/metrics.pkl', 'wb') as f:
         pickle.dump(metrics, f)
     
-    print("📈 Metrics saved!")
+    print(" Metrics saved!")
     return accuracy
 
 if __name__ == "__main__":
