@@ -84,6 +84,41 @@ pipeline {
                 '''
             }
         }
+        
+        stage('Copy Model to Server') {
+            steps {
+                echo 'Copying model to server directory...'
+                bat '''
+                    if not exist "serveur\\models" mkdir serveur\\models
+                    copy artifacts\\iris_model.pkl serveur\\models\\
+                    echo Model copied successfully
+                    dir serveur\\models
+                '''
+            }
+        }
+        
+        stage('Deploy Application') {
+            steps {
+                echo 'Deploying application...'
+                bat '''
+                    echo Stopping any running containers...
+                    docker-compose down 2>nul || echo No containers to stop
+                    
+                    echo Starting application...
+                    docker-compose up -d --build
+                    
+                    echo Waiting for services to start...
+                    timeout /t 10
+                    
+                    echo Application deployed! Access at:
+                    echo - Streamlit: http://localhost:8501
+                    echo - FastAPI: http://localhost:8000
+                    
+                    echo Checking running containers:
+                    docker-compose ps
+                '''
+            }
+        }
     }
     
     post {
@@ -111,17 +146,32 @@ pipeline {
             bat '''
                 echo.
                 echo =====================================
-                echo        BUILD SUMMARY - SUCCESS
+                echo   BUILD & DEPLOY SUMMARY - SUCCESS
                 echo =====================================
                 echo Model trained successfully
+                echo Application deployed and running
+                echo.
+                echo Access your application:
+                echo - Streamlit UI: http://localhost:8501
+                echo - FastAPI docs: http://localhost:8000/docs
+                echo.
                 echo Artifacts generated:
                 dir artifacts
+                echo.
+                echo Running services:
+                docker-compose ps
                 echo =====================================
             '''
         }
         
         failure {
             echo 'Pipeline failed!'
+            
+            // Stop deployment if it was started
+            bat '''
+                echo Stopping failed deployment...
+                docker-compose down 2>nul || echo No deployment to stop
+            '''
             
             // Debug information
             bat '''
@@ -145,6 +195,9 @@ pipeline {
                 echo.
                 echo Docker containers:
                 docker ps -a | findstr iris-container || echo No iris-container found
+                echo.
+                echo Docker Compose status:
+                docker-compose ps || echo No compose services
                 echo =====================================
             '''
         }
