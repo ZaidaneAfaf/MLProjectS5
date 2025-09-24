@@ -1,0 +1,12 @@
+services:
+  serveur:
+    build: ./serveur
+    ports:
+      - "8000:8000"
+
+  client:
+    build: ./client
+    ports:
+      - "8501:8501"
+    depends_on:
+      - serveur
