@@ -95,66 +95,87 @@ pipeline {
             }
         }
         
-        stage('Build Local Docker Images') {
-            steps {
-                echo 'Building Docker images from local context...'
-                bat '''
-                    echo Building serveur image...
-                    docker build -t iris-serveur:local ./serveur/ --no-cache --pull=never || (
-                        echo "Serveur build failed, trying with different base image..."
-                        echo "Checking available Python images..."
-                        docker images | findstr python
-                    )
-                    
-                    echo Building client image...
-                    docker build -t iris-client:local ./client/ --no-cache --pull=never || (
-                        echo "Client build failed, trying with different base image..."
-                        echo "Checking available Python images..."
-                        docker images | findstr python
-                    )
-                    
-                    echo Checking built images:
-                    docker images | findstr iris
-                '''
-            }
-        }
-        
         stage('Stop Previous Services') {
             steps {
                 echo 'Stopping previous services...'
                 bat '''
-                    docker-compose down --remove-orphans 2>nul || echo No services to stop
-                    docker container prune -f 2>nul
+                    echo Killing Python processes on ports 8000 and 8501...
+                    taskkill /F /IM python.exe 2>nul || echo No Python processes to kill
+                    taskkill /F /IM uvicorn.exe 2>nul || echo No uvicorn processes to kill  
+                    taskkill /F /IM streamlit.exe 2>nul || echo No streamlit processes to kill
+                    
+                    echo Stopping Docker containers...
+                    docker-compose down --remove-orphans 2>nul || echo No containers to stop
+                    docker stop iris-serveur iris-client 2>nul || echo No manual containers to stop
+                    docker rm iris-serveur iris-client 2>nul || echo No manual containers to remove
+                    
+                    echo Waiting for ports to be freed...
+                    timeout /t 3 /nobreak >nul 2>&1 || ping -n 3 127.0.0.1 >nul
                 '''
             }
         }
         
-        stage('Deploy with Local Images') {
+        stage('Deploy Application') {
             steps {
-                echo 'Deploying with locally built images...'
+                echo 'Deploying application...'
                 bat '''
-                    echo Starting services...
-                    docker-compose up -d --force-recreate || (
-                        echo "Docker Compose failed, trying manual container start..."
-                        
-                        echo "Starting serveur container..."
-                        docker run -d --name iris-serveur -p 8000:8000 -v "%CD%\\serveur\\models:/app/models" iris-serveur:local 2>nul || echo "Serveur start failed"
-                        
-                        echo "Starting client container..."
-                        docker run -d --name iris-client -p 8501:8501 iris-client:local 2>nul || echo "Client start failed"
+                    echo Attempting Docker Compose deployment...
+                    docker-compose up -d --build 2>nul && (
+                        echo Docker Compose deployment successful!
+                        timeout /t 10 /nobreak >nul 2>&1 || ping -n 10 127.0.0.1 >nul
+                        docker-compose ps
+                        curl -f http://localhost:8000 --connect-timeout 5 || echo API not ready yet
+                        goto :success
+                    ) || (
+                        echo Docker Compose failed, using Python fallback...
+                        goto :fallback
                     )
                     
+                    :fallback
+                    echo.
+                    echo ===== PYTHON FALLBACK DEPLOYMENT =====
+                    echo.
+                    
+                    echo Installing FastAPI requirements...
+                    cd serveur
+                    pip install fastapi uvicorn joblib numpy scikit-learn 2>nul || echo FastAPI deps already installed
+                    
+                    echo Starting FastAPI server...
+                    start /B /MIN python -m uvicorn app:app --host 0.0.0.0 --port 8000
+                    
+                    cd ..\\client
+                    echo Installing Streamlit requirements...
+                    pip install streamlit requests 2>nul || echo Streamlit deps already installed
+                    
+                    echo Starting Streamlit app...
+                    start /B /MIN streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+                    
+                    cd ..
+                    echo.
                     echo Waiting for services to start...
-                    timeout /t 10 /nobreak >nul 2>&1 || ping -n 10 127.0.0.1 >nul
+                    timeout /t 15 /nobreak >nul 2>&1 || ping -n 15 127.0.0.1 >nul
                     
-                    echo Checking running containers:
-                    docker ps
+                    :success
+                    echo.
+                    echo ===== TESTING DEPLOYMENT =====
+                    echo Testing FastAPI...
+                    curl -f http://localhost:8000 --connect-timeout 10 || echo FastAPI not responding
                     
-                    echo Testing API connectivity...
-                    curl -f http://localhost:8000 --connect-timeout 5 || (
-                        echo "API test failed, checking logs..."
-                        docker logs iris-serveur 2>nul || echo "No serveur logs"
-                    )
+                    echo Testing Streamlit...
+                    curl -f http://localhost:8501 --connect-timeout 10 || echo Streamlit not responding
+                    
+                    echo.
+                    echo ===== DEPLOYMENT SUMMARY =====
+                    echo Your Iris ML Application is running!
+                    echo - Streamlit UI: http://localhost:8501
+                    echo - FastAPI: http://localhost:8000
+                    echo - API Docs: http://localhost:8000/docs
+                    echo.
+                    echo Docker containers:
+                    docker ps | findstr iris || echo No Docker containers running
+                    echo.
+                    echo Python processes:
+                    tasklist | findstr python.exe || echo No Python processes visible
                 '''
             }
         }
@@ -162,68 +183,65 @@ pipeline {
     
     post {
         always {
-            echo 'Cleaning up...'
-            bat '''
-                echo Cleanup completed
-            '''
+            echo 'Archiving artifacts...'
+            archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
         }
         
         success {
             echo 'Pipeline completed successfully!'
             
-            archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
-            
             bat '''
                 echo.
-                echo =====================================
-                echo    LOCAL DEPLOYMENT SUCCESS!
-                echo =====================================
+                echo =========================================
+                echo        DEPLOYMENT SUCCESS!
+                echo =========================================
                 echo.
-                echo Your application should be running at:
-                echo - Streamlit UI: http://localhost:8501
-                echo - FastAPI: http://localhost:8000
+                echo Your Iris ML Application is ready!
                 echo.
-                echo Running containers:
-                docker ps | findstr iris || echo No iris containers running
+                echo Access URLs:
+                echo  - Main App (Streamlit): http://localhost:8501  
+                echo  - API Server (FastAPI): http://localhost:8000
+                echo  - API Documentation:    http://localhost:8000/docs
                 echo.
-                echo To test the API manually:
-                echo curl http://localhost:8000
-                echo =====================================
+                echo To test a prediction via API:
+                echo curl -X POST "http://localhost:8000/predict" -H "Content-Type: application/json" -d "{\\"SepalLengthCm\\": 5.1, \\"SepalWidthCm\\": 3.5, \\"PetalLengthCm\\": 1.4, \\"PetalWidthCm\\": 0.2}"
+                echo.
+                echo To stop the application:
+                echo   docker-compose down
+                echo   OR kill Python processes manually
+                echo =========================================
             '''
         }
         
         failure {
-            echo 'Pipeline failed! Trying fallback deployment...'
+            echo 'Pipeline failed!'
             
             bat '''
                 echo.
-                echo =====================================
-                echo      FALLBACK DEPLOYMENT
-                echo =====================================
+                echo =========================================
+                echo           PIPELINE FAILURE  
+                echo =========================================
                 echo.
-                echo Attempting direct Python deployment...
-                
-                echo Installing requirements for serveur...
-                cd serveur
-                pip install -r requirements.txt 2>nul || echo Requirements installation failed
-                
-                echo Starting FastAPI server in background...
-                start /B python -m uvicorn app:app --host 0.0.0.0 --port 8000
-                
-                cd ..\\client
-                echo Installing requirements for client...
-                pip install -r requirements.txt 2>nul || echo Requirements installation failed
-                
-                echo Starting Streamlit in background...
-                start /B streamlit run app.py --server.port 8501 --server.address 0.0.0.0
-                
-                cd ..
+                echo Diagnostic information:
                 echo.
-                echo Fallback deployment attempted!
-                echo Check manually:
-                echo - http://localhost:8000 for API
-                echo - http://localhost:8501 for Streamlit
-                echo =====================================
+                echo Python availability:
+                python --version || echo Python not available
+                echo.
+                echo Docker availability:  
+                docker --version || echo Docker not available
+                echo.
+                echo Port usage:
+                netstat -an | findstr :8000 || echo Port 8000 free
+                netstat -an | findstr :8501 || echo Port 8501 free
+                echo.
+                echo Artifacts status:
+                dir artifacts 2>nul || echo No artifacts directory
+                echo.
+                echo Suggested fixes:
+                echo 1. Ensure Python and Docker are installed
+                echo 2. Check if ports 8000/8501 are already in use
+                echo 3. Verify all dependencies are available
+                echo =========================================
             '''
         }
     }

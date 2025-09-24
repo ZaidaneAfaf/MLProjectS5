@@ -1,37 +1,26 @@
+# Version simple pour éviter l'erreur Docker Hub
 version: '3.8'
 
 services:
   serveur:
-    build: 
-      context: ./serveur
-      dockerfile: dockerfile
+    image: iris-serveur:latest  # Utilise l'image existante locale
     ports:
       - "8000:8000"
     volumes:
       - ./serveur/models:/app/models
     environment:
       - PYTHONUNBUFFERED=1
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
     networks:
       - iris-network
 
   client:
-    build: 
-      context: ./client
-      dockerfile: dockerfile
+    image: iris-client:latest   # Utilise l'image existante locale
     ports:
       - "8501:8501"
     depends_on:
       - serveur
     environment:
       - PYTHONUNBUFFERED=1
-    volumes:
-      - ./client:/app
     networks:
       - iris-network
 
