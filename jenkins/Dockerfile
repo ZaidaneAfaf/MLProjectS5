@@ -14,16 +14,19 @@ WORKDIR /app
 # Crée le dossier artifacts
 RUN mkdir -p artifacts
 
-# Copie et installe les dépendances en premier (cache Docker)
-COPY requirements.txt .
+# Copie d'abord requirements.txt depuis le bon répertoire
+COPY jenkins/requirements.txt .
+
+# Installe les dépendances
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copie les fichiers nécessaires
-COPY ../data/Iris.csv ./Iris.csv
+# Copie le dataset depuis le bon répertoire
+COPY data/Iris.csv ./Iris.csv
 
-COPY Iris.csv .
+# Copie le script d'entraînement depuis le bon répertoire
+COPY jenkins/train.py .
 
-# Permissions
+# Permissions pour le script Python
 RUN chmod +x train.py
 
 # Commande par défaut pour lancer le training
