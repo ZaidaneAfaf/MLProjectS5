@@ -108,3 +108,4 @@ if __name__ == "__main__":
     else:
         print(f"Final accuracy: {result:.2f}")
         sys.exit(0)"# Test Jenkins - 25/09/2025 22:25:58,56" 
+"# RÇentraånement modäle - fix features" 
