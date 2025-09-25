@@ -1,111 +1,85 @@
-# -*- coding: utf-8 -*-
+# train_fixed.py
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score
-import pickle
+import joblib
 import os
-import sys
 
-def main():
-    # Configuration de l'encodage pour Windows
-    if sys.platform.startswith('win'):
-        import codecs
-        try:
-            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
-        except:
-            pass  # Si ça échoue, on continue sans
-    
-    print("Starting Iris ML Training...")
-    
-    # Chargement des données
-    print("Loading dataset...")
-    
-    # Vérifier plusieurs chemins possibles pour le dataset
-    dataset_paths = [
-        'Iris.csv',
-        '../data/Iris.csv', 
-        './data/Iris.csv'
-    ]
-    
-    df = None
-    for path in dataset_paths:
-        try:
-            if os.path.exists(path):
-                df = pd.read_csv(path)
-                print(f"Dataset loaded from: {path}")
-                break
-        except Exception as e:
-            continue
-    
-    if df is None:
-        print("ERROR: Could not find Iris.csv dataset")
-        print("Available files in current directory:")
-        print(os.listdir('.'))
-        if os.path.exists('../data'):
-            print("Available files in ../data:")
-            print(os.listdir('../data'))
-        return None
-    
-    # Préparation des données
-    print(f"Dataset shape: {df.shape}")
-    print(f"Columns: {list(df.columns)}")
-    
-    # Supprimer la colonne 'Id' si elle existe
-    if 'Id' in df.columns:
-        X = df.drop(['Id', 'Species'], axis=1)
-    else:
-        X = df.drop(['Species'], axis=1)
-    
-    y = df['Species']
-    
-    print(f"Features: {list(X.columns)}")
-    print(f"Classes: {y.unique()}")
-    
-    # Division train/test
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-    
-    # Entraînement
-    print("Training model...")
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    
-    # Évaluation
-    y_pred = model.predict(X_test)
-    accuracy = accuracy_score(y_test, y_pred)
-    print(f"Accuracy of the model: {accuracy:.2f}")
-    
-    # Sauvegarde du modèle
-    os.makedirs('artifacts', exist_ok=True)
-    model_path = 'iris_model.pkl'  # Sauvegarde dans le répertoire courant
-    
-    with open(model_path, 'wb') as f:
-        pickle.dump(model, f)
-    
-    print(f"Model saved as {model_path}")
-    
-    # Sauvegarde des métriques
-    metrics = {
-        'accuracy': accuracy,
-        'model_type': 'RandomForestClassifier',
-        'features': list(X.columns)
-    }
-    
-    with open('metrics.pkl', 'wb') as f:
-        pickle.dump(metrics, f)
-    
-    print("Metrics saved!")
-    print("Training completed successfully!")
-    
-    return accuracy
+# 1. Chargement des données
+iris = pd.read_csv("data/Iris.csv")
 
-if __name__ == "__main__":
-    result = main()
-    if result is None:
-        sys.exit(1)
-    else:
-        print(f"Final accuracy: {result:.2f}")
-        sys.exit(0)"# Test Jenkins - 25/09/2025 22:25:58,56" 
-"# R�entra�nement mod�le - fix features" 
+print("📊 Dataset original:")
+print(f"Shape: {iris.shape}")
+print(f"Colonnes: {list(iris.columns)}")
+
+# 2. Supprimer TOUTES les colonnes non-features (Id, index, etc.)
+# Garder SEULEMENT les 4 features + la target
+feature_columns = ['SepalLengthCm', 'SepalWidthCm', 'PetalLengthCm', 'PetalWidthCm']
+target_column = 'Species'
+
+# Vérifier que toutes les colonnes nécessaires existent
+missing_cols = []
+for col in feature_columns + [target_column]:
+    if col not in iris.columns:
+        missing_cols.append(col)
+
+if missing_cols:
+    print(f"❌ Colonnes manquantes: {missing_cols}")
+    print("Colonnes disponibles:", list(iris.columns))
+    exit(1)
+
+# 3. Sélection exacte des features
+X = iris[feature_columns].copy()
+y = iris[target_column].copy()
+
+print(f"\n✅ Features sélectionnées: {X.shape}")
+print(f"Features: {list(X.columns)}")
+print(f"Target: {y.name}")
+
+# 4. Vérification des données
+print(f"\nDonnées X shape: {X.shape}")
+print(f"Données y shape: {y.shape}")
+print(f"Classes uniques: {y.unique()}")
+
+# 5. Split train/test
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, random_state=42, stratify=y
+)
+
+# 6. Entraînement du modèle
+model = SVC(probability=True, random_state=42)
+model.fit(X_train, y_train)
+
+# 7. Prédiction et évaluation
+y_pred = model.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+print(f"\n✅ Accuracy: {accuracy:.3f}")
+
+# 8. Vérification finale du modèle
+print(f"\n🔍 Modèle entraîné:")
+print(f"Features attendues: {model.n_features_in_}")
+print(f"Feature names: {getattr(model, 'feature_names_in_', 'Non disponible')}")
+
+# 9. Test rapide
+test_data = X_test.iloc[0:1]
+print(f"\n🧪 Test avec une prédiction:")
+print(f"Input shape: {test_data.shape}")
+print(f"Input: {test_data.values}")
+pred = model.predict(test_data)
+proba = model.predict_proba(test_data).max()
+print(f"Prédiction: {pred[0]}")
+print(f"Confiance: {proba:.3f}")
+
+# 10. Sauvegarde
+os.makedirs("models", exist_ok=True)
+joblib.dump(model, "models/iris_model.pkl")
+print(f"\n💾 Modèle sauvegardé: models/iris_model.pkl")
+
+# 11. Sauvegarder aussi les noms des features
+feature_info = {
+    'feature_names': feature_columns,
+    'n_features': len(feature_columns)
+}
+joblib.dump(feature_info, "models/feature_info.pkl")
+print("💾 Info features sauvegardées: models/feature_info.pkl")
