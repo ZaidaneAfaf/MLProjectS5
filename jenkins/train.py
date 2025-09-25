@@ -107,4 +107,4 @@ if __name__ == "__main__":
         sys.exit(1)
     else:
         print(f"Final accuracy: {result:.2f}")
-        sys.exit(0)
+        sys.exit(0)"# Test Jenkins - 25/09/2025 22:25:58,56" 
