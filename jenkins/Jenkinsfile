@@ -43,9 +43,16 @@ pipeline {
                 bat '''
                     echo Creating artifacts directory...
                     if not exist "artifacts" mkdir artifacts
+                    if not exist "artifacts\\tensorboard" mkdir artifacts\\tensorboard
                     
                     echo Installing Python dependencies...
                     pip install scikit-learn pandas numpy joblib || echo Some packages may already be installed
+                    
+                    echo Installing PyTorch for TensorBoard...
+                    pip install torch torchvision torchaudio tensorboard --index-url https://download.pytorch.org/whl/cpu || echo PyTorch installation failed, continuing without TensorBoard
+                    
+                    echo Installing PyTorch for TensorBoard...
+                    pip install torch torchvision torchaudio tensorboard --index-url https://download.pytorch.org/whl/cpu || echo PyTorch installation failed, continuing without TensorBoard
                     
                     echo Running training script locally...
                     cd jenkins
@@ -63,6 +70,14 @@ pipeline {
                     cd ..
                     echo Checking artifacts directory...
                     dir artifacts
+                    
+                    echo Checking TensorBoard logs...
+                    if exist "artifacts\\tensorboard" (
+                        dir artifacts\\tensorboard /S
+                        echo TensorBoard logs available
+                    ) else (
+                        echo No TensorBoard logs found
+                    )
                     
                     if exist "artifacts\\iris_model.pkl" (
                         echo SUCCESS: Model available for deployment
@@ -204,6 +219,14 @@ pipeline {
                 netstat -an | findstr :8000 && echo "Port 8000: IN USE" || echo "Port 8000: FREE"
                 netstat -an | findstr :8501 && echo "Port 8501: IN USE" || echo "Port 8501: FREE"
                 echo.
+                echo TensorBoard logs:
+                if exist "artifacts\\tensorboard" (
+                    echo TensorBoard available at: tensorboard --logdir artifacts/tensorboard --port 6006
+                    echo Then open: http://localhost:6006
+                ) else (
+                    echo No TensorBoard logs found
+                )
+                echo.
                 echo Your application should be available at:
                 echo  - Streamlit UI: http://localhost:8501
                 echo  - FastAPI: http://localhost:8000
@@ -228,6 +251,10 @@ pipeline {
                 echo  - API: http://localhost:8000
                 echo  - Docs: http://localhost:8000/docs
                 echo.
+                echo 📊 TensorBoard (if available):
+                echo  - Run: tensorboard --logdir artifacts/tensorboard --port 6006
+                echo  - Open: http://localhost:6006
+                echo.
                 echo 🧪 Test prediction:
                 echo curl -X POST "http://localhost:8000/predict" ^
                 echo      -H "Content-Type: application/json" ^
@@ -251,6 +278,9 @@ pipeline {
                 echo Please check manually:
                 echo  - http://localhost:8501
                 echo  - http://localhost:8000
+                echo.
+                echo TensorBoard (if available):
+                echo  - tensorboard --logdir artifacts/tensorboard --port 6006
                 echo =========================================
             '''
         }
