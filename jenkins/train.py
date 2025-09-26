@@ -117,4 +117,4 @@ print("2. Pour lancer TensorBoard, exécutez dans un nouveau terminal:")
 print("   tensorboard --logdir artifacts/tensorboard --port 6006")
 print("3. Ouvrez: http://localhost:6006")
 print("4. Les logs sont conservés entre les builds Jenkins")
-print("="*60)
+print("="*60)"# Ajout instructions TensorBoard" 
