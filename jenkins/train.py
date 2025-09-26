@@ -58,7 +58,7 @@ if TENSORBOARD_AVAILABLE:
         root_dir = current_dir
     
     # Chemin absolu vers TensorBoard
-    tensorboard_path = os.path.join(root_dir, "artifacts", "tensorboard", "iris_svm")
+    tensorboard_path = os.path.join(root_dir, "artifacts", "tensorboard")
     os.makedirs(tensorboard_path, exist_ok=True)
     
     print(f"📁 Répertoire de travail: {current_dir}")
