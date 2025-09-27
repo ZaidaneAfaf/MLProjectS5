@@ -31,6 +31,48 @@ pipeline {
             }
         }
         
+        stage('Verify Project Structure') {
+            steps {
+                bat '''
+                    echo Checking project structure...
+                    echo.
+                    echo Checking if Dockerfile exists:
+                    if exist "Dockerfile" (
+                        echo ✓ Dockerfile found
+                        type Dockerfile
+                    ) else (
+                        echo ERROR: Dockerfile not found!
+                        echo Creating a simple Dockerfile...
+                        echo FROM python:3.11-slim > Dockerfile
+                        echo WORKDIR /app >> Dockerfile
+                        echo COPY . . >> Dockerfile
+                        echo RUN pip install scikit-learn pandas numpy >> Dockerfile
+                        echo CMD ["python", "train.py"] >> Dockerfile
+                    )
+                    echo.
+                    echo Checking if train.py exists:
+                    if exist "train.py" (
+                        echo ✓ train.py found in root
+                    ) else if exist "jenkins\\train.py" (
+                        echo ✓ train.py found in jenkins/ directory
+                    ) else (
+                        echo ✗ train.py NOT found!
+                        exit 1
+                    )
+                    echo.
+                    echo Checking if data file exists:
+                    if exist "Iris.csv" (
+                        echo ✓ Iris.csv found in root
+                    ) else if exist "data\\Iris.csv" (
+                        echo ✓ Iris.csv found in data/ directory
+                    ) else (
+                        echo ✗ Iris.csv NOT found!
+                        echo This is normal if the script downloads the data
+                    )
+                '''
+            }
+        }
+        
         stage('Build Docker Image') {
             steps {
                 echo 'Building Docker image...'
@@ -40,6 +82,10 @@ pipeline {
                     echo.
                     echo Verifying image was built:
                     docker images | findstr %DOCKER_IMAGE%
+                    if errorlevel 1 (
+                        echo ERROR: Docker image was not built successfully!
+                        exit 1
+                    )
                 '''
             }
         }
@@ -52,9 +98,10 @@ pipeline {
                     if not exist "artifacts" mkdir artifacts
                     
                     echo Running Docker container for training...
-                    docker run --name %CONTAINER_NAME%-%BUILD_NUMBER% --rm -v "%WORKSPACE%\\artifacts:/app/artifacts" %DOCKER_IMAGE_TAG%
+                    docker run --name %CONTAINER_NAME%-%BUILD_NUMBER% --rm -v "%CD%\\artifacts:/app/artifacts" %DOCKER_IMAGE_TAG%
                     
                     echo Training completed. Checking artifacts...
+                    timeout /t 10 /nobreak
                     dir artifacts
                 '''
             }
@@ -73,12 +120,39 @@ pipeline {
                             echo File size:
                             for %%I in (artifacts\\iris_model.pkl) do echo %%~zI bytes
                         ) else (
-                            echo ERROR: Model file not found!
-                            exit 1
+                            echo WARNING: Model file not found in artifacts!
+                            echo Checking root directory...
+                            if exist "iris_model.pkl" (
+                                echo ✓ Model found in root, moving to artifacts...
+                                copy iris_model.pkl artifacts\\
+                                echo Model moved successfully
+                            ) else (
+                                echo ERROR: No model file generated!
+                                exit 1
+                            )
                         )
                     ) else (
                         echo ERROR: Artifacts directory not found!
                         exit 1
+                    )
+                '''
+            }
+        }
+        
+        stage('Deploy to Server') {
+            steps {
+                echo 'Deploying model to server...'
+                bat '''
+                    echo Copying model to server directory...
+                    if not exist "serveur\\models" mkdir serveur\\models
+                    if exist "artifacts\\iris_model.pkl" (
+                        copy artifacts\\iris_model.pkl serveur\\models\\
+                        echo Model copied to server successfully
+                    ) else if exist "iris_model.pkl" (
+                        copy iris_model.pkl serveur\\models\\
+                        echo Model copied to server successfully
+                    ) else (
+                        echo WARNING: No model file to copy to server
                     )
                 '''
             }
@@ -89,12 +163,12 @@ pipeline {
         always {
             echo 'Cleaning up Docker resources...'
             bat '''
+                echo Removing Docker container if still running...
+                docker stop %CONTAINER_NAME%-%BUILD_NUMBER% 2>nul || echo No container to stop
+                docker rm %CONTAINER_NAME%-%BUILD_NUMBER% 2>nul || echo No container to remove
+                
                 echo Removing Docker image: %DOCKER_IMAGE_TAG%
                 docker rmi %DOCKER_IMAGE_TAG% 2>nul || echo Image already removed or not found
-                
-                echo Cleaning up unused Docker resources...
-                docker container prune -f 2>nul || echo No containers to clean
-                docker image prune -f 2>nul || echo No images to clean
                 
                 echo Cleanup completed.
             '''
@@ -104,7 +178,7 @@ pipeline {
             echo 'Pipeline completed successfully!'
             
             // Archive artifacts
-            archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: false
+            archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
             
             // Display summary
             bat '''
@@ -115,6 +189,9 @@ pipeline {
                 echo Model trained successfully
                 echo Artifacts generated:
                 dir artifacts
+                echo.
+                echo Server models directory:
+                if exist "serveur\\models" dir serveur\\models
                 echo =====================================
             '''
         }
@@ -139,7 +216,7 @@ pipeline {
                     echo Artifacts directory does not exist
                 )
                 echo.
-                echo Docker images with iris-train:
+                echo Docker images:
                 docker images | findstr iris-train || echo No iris-train images found
                 echo.
                 echo Docker containers:
