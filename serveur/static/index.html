@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Test Iris MLOps</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        input, select { margin-right: 10px; }
+        button { margin-top: 10px; padding: 5px 10px; }
+        .result { margin-top: 20px; padding: 10px; border: 1px solid #ccc; background: #f9f9f9; }
+        textarea { width: 100%; height: 100px; }
+    </style>
+</head>
+<body>
+    <h1>Test Iris MLOps</h1>
+
+    <!-- Prédiction simple -->
+    <h2>Prédiction simple (1 observation)</h2>
+    <form id="singleForm">
+        <label>SepalLengthCm: <input type="number" step="0.1" name="SepalLengthCm" required></label>
+        <label>SepalWidthCm: <input type="number" step="0.1" name="SepalWidthCm" required></label>
+        <label>PetalLengthCm: <input type="number" step="0.1" name="PetalLengthCm" required></label>
+        <label>PetalWidthCm: <input type="number" step="0.1" name="PetalWidthCm" required></label>
+        <br>
+        <button type="submit">Prédire</button>
+    </form>
+    <div id="singleResult" class="result"></div>
+
+    <hr>
+
+    <!-- Comparaison batch -->
+    <h2>Comparaison via fichier JSON</h2>
+    <input type="file" id="jsonFile">
+    <button id="uploadBtn">Uploader et comparer</button>
+    <div id="fileCompareResult" class="result"></div>
+
+    <hr>
+
+    <!-- Gestion des modèles -->
+    <h2>Gestion des modèles</h2>
+
+    <h3>Liste des modèles</h3>
+    <button id="listModelsBtn">Lister les modèles</button>
+    <div id="modelsList" class="result"></div>
+
+    <h3>Ajouter un modèle pré-entraîné (.pkl)</h3>
+    <input type="file" id="addModelFile">
+    <input type="number" step="0.001" placeholder="Accuracy" id="addModelAccuracy">
+    <input type="number" step="0.001" placeholder="F1-macro" id="addModelF1">
+    <button id="addModelBtn">Ajouter modèle</button>
+    <div id="addModelResult" class="result"></div>
+
+    <h3>Supprimer un modèle</h3>
+    <input type="text" id="deleteModelName" placeholder="Nom du modèle">
+    <button id="deleteModelBtn">Supprimer modèle</button>
+    <div id="deleteModelResult" class="result"></div>
+
+    <script>
+        const apiBase = "http://127.0.0.1:8000";
+
+        // Prédiction simple
+        document.getElementById("singleForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = { mode: "single" };
+            formData.forEach((value, key) => data[key] = parseFloat(value));
+
+            const response = await fetch(apiBase + "/predict", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(data)
+            });
+
+            const result = await response.json();
+            document.getElementById("singleResult").innerText = JSON.stringify(result, null, 2);
+        });
+
+        // Comparaison batch
+        document.getElementById("uploadBtn").addEventListener("click", async () => {
+            const fileInput = document.getElementById("jsonFile");
+            if (!fileInput.files.length) return alert("Veuillez choisir un fichier JSON.");
+
+            const formData = new FormData();
+            formData.append("file", fileInput.files[0]);
+
+            const response = await fetch(apiBase + "/compare_file", {
+                method: "POST",
+                body: formData
+            });
+
+            const result = await response.json();
+            document.getElementById("fileCompareResult").innerText = JSON.stringify(result, null, 2);
+        });
+
+        // Liste des modèles
+        document.getElementById("listModelsBtn").addEventListener("click", async () => {
+            const response = await fetch(apiBase + "/list_models");
+            const result = await response.json();
+            document.getElementById("modelsList").innerText = JSON.stringify(result, null, 2);
+        });
+
+        // Ajouter un modèle
+        document.getElementById("addModelBtn").addEventListener("click", async () => {
+            const fileInput = document.getElementById("addModelFile");
+            if (!fileInput.files.length) return alert("Veuillez choisir un fichier .pkl");
+
+            const accuracy = parseFloat(document.getElementById("addModelAccuracy").value);
+            const f1_macro = parseFloat(document.getElementById("addModelF1").value);
+
+            const formData = new FormData();
+            formData.append("file", fileInput.files[0]);
+            if (!isNaN(accuracy)) formData.append("accuracy", accuracy);
+            if (!isNaN(f1_macro)) formData.append("f1_macro", f1_macro);
+
+            const response = await fetch(apiBase + "/add_model", {
+                method: "POST",
+                body: formData
+            });
+
+            const result = await response.json();
+            document.getElementById("addModelResult").innerText = JSON.stringify(result, null, 2);
+        });
+
+        // Supprimer un modèle
+        document.getElementById("deleteModelBtn").addEventListener("click", async () => {
+            const modelName = document.getElementById("deleteModelName").value.trim();
+            if (!modelName) return alert("Veuillez entrer un nom de modèle");
+
+            const response = await fetch(apiBase + `/delete_model?model_name=${modelName}`, {
+                method: "DELETE"
+            });
+
+            const result = await response.json();
+            document.getElementById("deleteModelResult").innerText = JSON.stringify(result, null, 2);
+        });
+    </script>
+</body>
+</html>
