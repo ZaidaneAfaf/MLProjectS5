@@ -95,20 +95,36 @@ pipeline {
             }
         }
         
+        stage('Fix Dockerfile Extension') {
+            steps {
+                echo 'Fixing Dockerfile.tensorboard extension...'
+                bat '''
+                    echo Renaming Dockerfile.tensorboard.txt to Dockerfile.tensorboard...
+                    if exist "Dockerfile.tensorboard.txt" (
+                        ren Dockerfile.tensorboard.txt Dockerfile.tensorboard
+                        echo File renamed successfully
+                    ) else (
+                        echo Creating Dockerfile.tensorboard...
+                        echo FROM tensorflow/tensorflow:2.13.0 > Dockerfile.tensorboard
+                        echo RUN pip install psutil matplotlib >> Dockerfile.tensorboard
+                        echo WORKDIR /app >> Dockerfile.tensorboard
+                        echo EXPOSE 6006 >> Dockerfile.tensorboard
+                        echo CMD ["tensorboard", "--logdir=/tensorboard_logs", "--host=0.0.0.0", "--port=6006", "--reload_interval=5"] >> Dockerfile.tensorboard
+                        echo Dockerfile.tensorboard created
+                    )
+                    
+                    dir Dockerfile.tensorboard*
+                '''
+            }
+        }
+        
         stage('Build TensorBoard Image') {
             steps {
                 echo 'Building custom TensorBoard image...'
                 bat '''
-                    echo Checking for Dockerfile.tensorboard...
-                    dir Dockerfile.tensorboard* 2>nul && (
-                        echo Building TensorBoard Docker image...
-                        docker build -t iris-tensorboard:latest -f Dockerfile.tensorboard .
-                        echo TensorBoard image built successfully
-                    ) || (
-                        echo Using default TensorBoard image
-                        docker pull tensorflow/tensorflow:2.13.0
-                        docker tag tensorflow/tensorflow:2.13.0 iris-tensorboard:latest
-                    )
+                    echo Building TensorBoard Docker image...
+                    docker build -t iris-tensorboard:latest -f Dockerfile.tensorboard .
+                    echo TensorBoard image built successfully
                     
                     docker images | findstr iris-tensorboard
                 '''
@@ -281,6 +297,11 @@ pipeline {
                 echo  - API: http://localhost:8000
                 echo  - Docs: http://localhost:8000/docs
                 echo  - TensorBoard: http://localhost:6006
+                echo.
+                echo 📊 TensorBoard Features:
+                echo  - Real-time CPU/RAM monitoring during training
+                echo  - Model performance comparison
+                echo  - Confusion matrices visualization
                 echo.
                 echo 🧪 Test prediction:
                 curl -X POST "http://localhost:8000/predict" ^
