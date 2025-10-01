@@ -171,28 +171,28 @@ pipeline {
                     echo Testing services availability...
                     echo Testing API...
                     curl -f http://localhost:8000 --connect-timeout 10 --max-time 15 && (
-                        echo ✅ API: RESPONDING
+                        echo API: RESPONDING
                     ) || (
-                        echo ⚠️ API: NOT READY YET
+                        echo API: NOT READY YET
                     )
                     
                     echo Testing Streamlit...
                     curl -f http://localhost:8501 --connect-timeout 10 --max-time 15 && (
-                        echo ✅ STREAMLIT: RESPONDING  
+                        echo STREAMLIT: RESPONDING  
                     ) || (
-                        echo ⚠️ STREAMLIT: NOT READY YET
+                        echo STREAMLIT: NOT READY YET
                     )
                     
                     echo Testing TensorBoard...
                     curl -f http://localhost:6006 --connect-timeout 10 --max-time 15 && (
-                        echo ✅ TENSORBOARD: RESPONDING  
+                        echo TENSORBOARD: RESPONDING  
                     ) || (
-                        echo ⚠️ TENSORBOARD: NOT READY YET - waiting additional time...
+                        echo TENSORBOARD: NOT READY YET - waiting additional time...
                         timeout /t 10 /nobreak >nul 2>&1
                         curl -f http://localhost:6006 --connect-timeout 10 --max-time 15 && (
-                            echo ✅ TENSORBOARD: NOW RESPONDING
+                            echo TENSORBOARD: NOW RESPONDING
                         ) || (
-                            echo ⚠️ TENSORBOARD: STILL STARTING
+                            echo TENSORBOARD: STILL STARTING
                         )
                     )
                     
@@ -212,25 +212,25 @@ pipeline {
                     try {
                         bat 'curl -f http://localhost:8000 --connect-timeout 10 --max-time 15'
                         apiWorking = true
-                        echo "✅ API is responding"
+                        echo "API is responding"
                     } catch (Exception e) {
-                        echo "⚠️ API not responding"
+                        echo "API not responding"
                     }
                     
                     try {
                         bat 'curl -f http://localhost:8501 --connect-timeout 10 --max-time 15'
                         streamlitWorking = true
-                        echo "✅ Streamlit is responding"
+                        echo "Streamlit is responding"
                     } catch (Exception e) {
-                        echo "⚠️ Streamlit not responding"
+                        echo "Streamlit not responding"
                     }
                     
                     try {
                         bat 'curl -f http://localhost:6006 --connect-timeout 10 --max-time 15'
                         tensorboardWorking = true
-                        echo "✅ TensorBoard is responding"
+                        echo "TensorBoard is responding"
                     } catch (Exception e) {
-                        echo "⚠️ TensorBoard not responding"
+                        echo "TensorBoard not responding"
                     }
                     
                     def workingServices = []
@@ -238,16 +238,16 @@ pipeline {
                     if (streamlitWorking) workingServices.add("Streamlit")
                     if (tensorboardWorking) workingServices.add("TensorBoard")
                     
-                    echo "📊 Services status: ${workingServices.join(', ')}"
+                    echo "Services status: ${workingServices.join(', ')}"
                     
                     if (workingServices.size() >= 2) {
-                        echo "🎉 Deployment successful - services running: ${workingServices}"
+                        echo "Deployment successful - services running: ${workingServices}"
                         currentBuild.result = 'SUCCESS'
                     } else if (workingServices.size() >= 1) {
-                        echo "⚠️ Limited deployment - only ${workingServices} running"
+                        echo "Limited deployment - only ${workingServices} running"
                         currentBuild.result = 'UNSTABLE'
                     } else {
-                        echo "❌ No services responding"
+                        echo "No services responding"
                         currentBuild.result = 'FAILURE'
                     }
                 }
@@ -269,20 +269,21 @@ pipeline {
                 docker-compose ps || echo Docker compose not available
                 echo.
                 echo Port usage:
-                netstat -an | findstr ":8000" && echo "Port 8000 (API): IN USE" || echo "Port 8000 (API): FREE"
-                netstat -an | findstr ":8501" && echo "Port 8501 (Streamlit): IN USE" || echo "Port 8501 (Streamlit): FREE"
-                netstat -an | findstr ":6006" && echo "Port 6006 (TensorBoard): IN USE" || echo "Port 6006 (TensorBoard): FREE"
+                netstat -an | findstr ":8000" >nul && echo Port 8000 (API): IN USE || echo Port 8000 (API): FREE
+                netstat -an | findstr ":8501" >nul && echo Port 8501 (Streamlit): IN USE || echo Port 8501 (Streamlit): FREE
+                netstat -an | findstr ":6006" >nul && echo Port 6006 (TensorBoard): IN USE || echo Port 6006 (TensorBoard): FREE
                 echo.
                 echo Application URLs:
-                echo 🌐 Streamlit UI: http://localhost:8501
-                echo 🔗 FastAPI: http://localhost:8000
-                echo 📚 API Docs: http://localhost:8000/docs
-                echo 📊 TensorBoard: http://localhost:6006
+                echo Streamlit UI: http://localhost:8501
+                echo FastAPI: http://localhost:8000
+                echo API Docs: http://localhost:8000/docs
+                echo TensorBoard: http://localhost:6006
+                exit /b 0
             '''
         }
         
         success {
-            echo '🎉 Pipeline completed successfully!'
+            echo 'Pipeline completed successfully!'
             
             bat '''
                 echo.
@@ -290,31 +291,31 @@ pipeline {
                 echo        DEPLOYMENT SUCCESS!
                 echo =========================================
                 echo.
-                echo 🌸 Iris ML Application with TensorBoard
+                echo Iris ML Application with TensorBoard
                 echo.
-                echo 🌐 Access URLs:
+                echo Access URLs:
                 echo  - Main App: http://localhost:8501  
                 echo  - API: http://localhost:8000
                 echo  - Docs: http://localhost:8000/docs
                 echo  - TensorBoard: http://localhost:6006
                 echo.
-                echo 📊 TensorBoard Features:
+                echo TensorBoard Features:
                 echo  - Real-time CPU/RAM monitoring during training
                 echo  - Model performance comparison
                 echo  - Confusion matrices visualization
                 echo.
-                echo 🧪 Test prediction:
+                echo Test prediction:
                 curl -X POST "http://localhost:8000/predict" ^
                   -H "Content-Type: application/json" ^
                   -d "{\\"SepalLengthCm\\": 5.1, \\"SepalWidthCm\\": 3.5, \\"PetalLengthCm\\": 1.4, \\"PetalWidthCm\\": 0.2}" 2>nul || echo Test command ready
                 echo.
-                echo 🛑 To stop: docker-compose down
+                echo To stop: docker-compose down
                 echo =========================================
             '''
         }
         
         unstable {
-            echo '⚠️ Pipeline completed with warnings'
+            echo 'Pipeline completed with warnings'
             
             bat '''
                 echo.
@@ -335,7 +336,7 @@ pipeline {
         }
         
         failure {
-            echo '❌ Pipeline failed'
+            echo 'Pipeline failed'
             
             bat '''
                 echo.
