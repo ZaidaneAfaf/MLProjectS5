@@ -15,7 +15,9 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
     networks:
-      - iris-network
+      iris-network:
+        aliases:
+          - backend  # AJOUTEZ CETTE LIGNE
 
   client:
     build:
@@ -30,7 +32,7 @@ services:
       - serveur
     environment:
       - PYTHONUNBUFFERED=1
-      - API_URL=http://serveur:8000
+      - API_URL=http://backend:8000  # Maintenant "backend" fonctionnera
     networks:
       - iris-network
 
