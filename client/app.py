@@ -1,39 +1,88 @@
 import streamlit as st
-import requests
+
+API_URL = "http://backend:8000/predict"
 
 # ===============================
-# Config API URL (Docker: "serveur")
+# Page config
 # ===============================
-API_URL = "http://serveur:8000/predict"
+st.set_page_config(
+    page_title="Prédiction Iris & Gestion Modèles",
+    page_icon="🌸",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ===============================
-# Custom CSS
+# CSS global
 # ===============================
 st.markdown(
     """
     <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {display: none !important;}
+
+    section[data-testid="stSidebar"] {
+        visibility: visible !important;
+        transform: none !important;
+        position: fixed !important;
+        height: 100vh !important;
+    }
+
+    .main .block-container {
+        padding-left: 300px;
+    }
+
+    button[title="Hide sidebar"] {
+        display: none !important;
+    }
+
     .stApp {
         background: linear-gradient(to right, #f0f4f8, #d9e2ec);
         font-family: 'Arial', sans-serif;
     }
+
     .stButton>button {
         background-color: #FF6F61;
         color: white;
         border-radius: 12px;
         padding: 12px 24px;
-        font-size: 18px;
+        font-size: 16px;
         font-weight: bold;
         border: none;
         transition: 0.3s;
+        margin-bottom: 10px;
     }
+
     .stButton>button:hover {
         background-color: #FF3B2E;
     }
-    h1 {
-        color: #333;
+
+    .centered-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        min-height: 60vh;
     }
-    .stSlider>div>div>div>div {
-        color: #FF6F61;
+
+    .flower-emoji {
+        font-size: 120px;
+        margin-bottom: 20px;
+        animation: float 3s ease-in-out infinite;
+    }
+
+    @keyframes float {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-10px); }
+    }
+
+    .main-title {
+        text-align:center;
+        color:#333;
+        font-size: 30px;
+        margin-bottom: 20px;
     }
     </style>
     """,
@@ -41,59 +90,27 @@ st.markdown(
 )
 
 # ===============================
-# Titre et description
+# Contenu principal
 # ===============================
-st.markdown("<h1 style='text-align:center;'>🌸 Prédiction Iris 🌸</h1>", unsafe_allow_html=True)
+st.markdown("<h1 class='main-title'>🌸 Prédiction des Fleurs d'Iris & Gestion des Modèles</h1>", unsafe_allow_html=True)
+
 st.markdown(
     """
-    Entrez les mesures des sépales et des pétales pour prédire l'espèce d'iris.  
-    Cliquez sur **Prédiction** pour voir le résultat.
+    <div class="centered-content">
+        <div class="flower-emoji">🌺</div>
+        <h2 style='color: #333; margin-bottom: 20px;'>Bienvenue sur votre application</h2>
+        <p style='font-size: 18px; color: #666; max-width: 700px;'>
+        Cette plateforme vous permet de :
+        </p>
+        <ul style='font-size: 18px; color: #444; text-align:left; max-width:700px; margin:0 auto;'>
+            <li>🌼 <b>Prédire</b> l'espèce d'une fleur d'iris à partir de ses mesures.</li>
+            <li>⚙️ <b>Gérer</b> vos modèles de Machine Learning (ajout, suppression, liste).</li>
+            <li>📊 <b>Comparer</b> différents modèles et leurs performances.</li>
+        </ul>
+        <p style='font-size: 16px; color: #777; margin-top:20px;'>
+        Utilisez le menu latéral pour naviguer entre les sections :Observation , Gestion et Comparaison.
+        </p>
+    </div>
     """,
     unsafe_allow_html=True
 )
-
-# ===============================
-# Sliders pour les mesures
-# ===============================
-col1, col2 = st.columns(2)
-
-with col1:
-    sepal_length = st.slider("Longueur des sépales (cm)", 0.0, 10.0, 5.0)
-    sepal_width = st.slider("Largeur des sépales (cm)", 0.0, 10.0, 3.5)
-
-with col2:
-    petal_length = st.slider("Longueur des pétales (cm)", 0.0, 10.0, 4.0)
-    petal_width = st.slider("Largeur des pétales (cm)", 0.0, 10.0, 1.3)
-
-# ===============================
-# Bouton de prédiction
-# ===============================
-if st.button("Prédiction"):
-    with st.spinner("Calcul en cours..."):
-        data = {
-            "SepalLengthCm": sepal_length,
-            "SepalWidthCm": sepal_width,
-            "PetalLengthCm": petal_length,
-            "PetalWidthCm": petal_width
-        }
-        try:
-            response = requests.post(API_URL, json=data)
-            res_json = response.json()
-
-            if "error" in res_json:
-                st.error(f"Erreur API: {res_json['error']}")
-            else:
-                species_name = res_json.get("prediction")
-                confidence = res_json.get("confidence")
-
-                st.markdown(
-                    f"""
-                    <div style='text-align: center; margin-top: 20px;'>
-                        <h2 style='color:#FF6F61;'>🌼 Fleur prédite: {species_name}</h2>
-                        <p>Confiance: {confidence}</p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-        except Exception as e:
-            st.error(f"Erreur lors de l'appel API : {e}")

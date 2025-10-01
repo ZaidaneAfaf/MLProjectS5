@@ -1,29 +1,33 @@
-# Version simple pour éviter l'erreur Docker Hub
 version: '3.8'
 
 services:
-  serveur:
-    image: iris-serveur:latest  # Utilise l'image existante locale
+  backend:
+    build: 
+      context: ./serveur
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      - ./serveur/models:/app/models
+      - ./serveur:/app
+      - ./models:/app/models
     environment:
-      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
     networks:
-      - iris-network
+      - app-network
 
-  client:
-    image: iris-client:latest   # Utilise l'image existante locale
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
     ports:
-      - "8501:8501"
+      - "8502:8501"
+    volumes:
+      - ./client:/app
     depends_on:
-      - serveur
-    environment:
-      - PYTHONUNBUFFERED=1
+      - backend
     networks:
-      - iris-network
+      - app-network
 
 networks:
-  iris-network:
+  app-network:
     driver: bridge
