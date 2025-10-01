@@ -158,13 +158,13 @@ pipeline {
                     echo Starting Docker Compose with TensorBoard...
                     docker-compose up -d --build
                     
-                    echo Waiting for services to start...
-                    timeout /t 90 /nobreak 1>nul 2>&1
+                    echo Waiting for services to initialize...
+                    timeout /t 120 /nobreak 1>nul 2>&1
                     
                     echo Checking container status...
                     docker-compose ps
                     
-                    echo Deployment completed - services are starting up
+                    echo Deployment completed - waiting for services to be ready
                 '''
             }
         }
@@ -173,58 +173,58 @@ pipeline {
             steps {
                 echo 'Verifying deployment with retries...'
                 script {
-                    def maxRetries = 15
-                    def retryDelay = 10
+                    def maxRetries = 20
+                    def retryDelay = 15
                     
                     // Check API
                     echo 'Checking FastAPI service...'
                     def apiOk = false
                     for (int i = 0; i < maxRetries; i++) {
-                        def apiStatus = bat(
-                            script: "curl -f http://localhost:8000 --connect-timeout 5 --max-time 10",
-                            returnStatus: true
-                        )
-                        if (apiStatus == 0) {
+                        try {
+                            bat(script: "curl -f http://localhost:8000 --connect-timeout 5 --max-time 10 2>nul", returnStatus: false)
                             echo "API is responding"
                             apiOk = true
                             break
+                        } catch (Exception e) {
+                            echo "Waiting for API... retry ${i+1}/${maxRetries}"
+                            if (i < maxRetries - 1) {
+                                sleep(time: retryDelay, unit: 'SECONDS')
+                            }
                         }
-                        echo "Waiting for API... retry ${i+1}/${maxRetries}"
-                        bat "timeout /t ${retryDelay} /nobreak 1>nul 2>&1"
                     }
                     
                     // Check Streamlit
                     echo 'Checking Streamlit service...'
                     def streamlitOk = false
                     for (int i = 0; i < maxRetries; i++) {
-                        def streamlitStatus = bat(
-                            script: "curl -f http://localhost:8501 --connect-timeout 5 --max-time 10",
-                            returnStatus: true
-                        )
-                        if (streamlitStatus == 0) {
+                        try {
+                            bat(script: "curl -f http://localhost:8501 --connect-timeout 5 --max-time 10 2>nul", returnStatus: false)
                             echo "Streamlit is responding"
                             streamlitOk = true
                             break
+                        } catch (Exception e) {
+                            echo "Waiting for Streamlit... retry ${i+1}/${maxRetries}"
+                            if (i < maxRetries - 1) {
+                                sleep(time: retryDelay, unit: 'SECONDS')
+                            }
                         }
-                        echo "Waiting for Streamlit... retry ${i+1}/${maxRetries}"
-                        bat "timeout /t ${retryDelay} /nobreak 1>nul 2>&1"
                     }
                     
                     // Check TensorBoard
                     echo 'Checking TensorBoard service...'
                     def tensorboardOk = false
                     for (int i = 0; i < maxRetries; i++) {
-                        def tensorboardStatus = bat(
-                            script: "curl -f http://localhost:6006 --connect-timeout 5 --max-time 10",
-                            returnStatus: true
-                        )
-                        if (tensorboardStatus == 0) {
+                        try {
+                            bat(script: "curl -f http://localhost:6006 --connect-timeout 5 --max-time 10 2>nul", returnStatus: false)
                             echo "TensorBoard is responding"
                             tensorboardOk = true
                             break
+                        } catch (Exception e) {
+                            echo "Waiting for TensorBoard... retry ${i+1}/${maxRetries}"
+                            if (i < maxRetries - 1) {
+                                sleep(time: retryDelay, unit: 'SECONDS')
+                            }
                         }
-                        echo "Waiting for TensorBoard... retry ${i+1}/${maxRetries}"
-                        bat "timeout /t ${retryDelay} /nobreak 1>nul 2>&1"
                     }
                     
                     // Build status report
@@ -233,18 +233,19 @@ pipeline {
                     if (streamlitOk) servicesStatus.add("Streamlit")
                     if (tensorboardOk) servicesStatus.add("TensorBoard")
                     
-                    echo "Services status: ${servicesStatus.join(', ')}"
+                    echo "Services responding: ${servicesStatus.join(', ')}"
                     
                     // Determine build result
                     if (apiOk && streamlitOk && tensorboardOk) {
-                        echo "All services are responding correctly"
+                        echo "All services verified successfully"
                         currentBuild.result = 'SUCCESS'
                     } else if (streamlitOk || apiOk) {
-                        echo "Partial deployment - some services running"
+                        echo "Partial deployment - marking as UNSTABLE"
                         currentBuild.result = 'UNSTABLE'
                     } else {
-                        echo "Deployment failed - no services responding"
-                        error("Deployment verification failed")
+                        echo "No services responding - marking as FAILURE"
+                        currentBuild.result = 'FAILURE'
+                        error("Deployment verification failed - no services responding")
                     }
                 }
             }
@@ -304,15 +305,14 @@ pipeline {
                 echo    DEPLOYMENT COMPLETED WITH WARNINGS
                 echo =========================================
                 echo.
-                echo Some services may need additional time to initialize.
+                echo Some services may need additional time.
                 echo.
-                echo Please check manually:
+                echo Please verify manually:
                 echo  - http://localhost:8501
                 echo  - http://localhost:8000  
                 echo  - http://localhost:6006
                 echo.
-                echo Check Docker containers:
-                echo docker-compose ps
+                echo Check: docker-compose ps
                 echo =========================================
             '''
         }
