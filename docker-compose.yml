@@ -1,33 +1,52 @@
 version: '3.8'
 
 services:
-  backend:
-    build: 
+  serveur:
+    build:
       context: ./serveur
       dockerfile: Dockerfile
+    image: iris-serveur:latest
     ports:
       - "8000:8000"
     volumes:
       - ./serveur:/app
-      - ./models:/app/models
+      - ./serveur/models:/app/models
     environment:
+      - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
     networks:
-      - app-network
+      - iris-network
 
-  frontend:
+  client:
     build:
       context: ./client
       dockerfile: Dockerfile
+    image: iris-client:latest
     ports:
       - "8501:8501"
     volumes:
       - ./client:/app
     depends_on:
-      - backend
+      - serveur
+    environment:
+      - PYTHONUNBUFFERED=1
+      - API_URL=http://serveur:8000
     networks:
-      - app-network
+      - iris-network
+
+  tensorboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.tensorboard
+    image: iris-tensorboard:latest
+    ports:
+      - "6006:6006"
+    volumes:
+      - ./artifacts/tensorboard:/tensorboard_logs
+    command: tensorboard --logdir=/tensorboard_logs --host=0.0.0.0 --port=6006 --reload_interval=5
+    networks:
+      - iris-network
 
 networks:
-  app-network:
+  iris-network:
     driver: bridge

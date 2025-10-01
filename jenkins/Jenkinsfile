@@ -5,7 +5,6 @@ pipeline {
         DOCKER_IMAGE = 'iris-train'
         CONTAINER_NAME = 'iris-container'
         DOCKER_IMAGE_TAG = "${DOCKER_IMAGE}:${BUILD_NUMBER}"
-        // Configuration pour l'encodage Windows
         PYTHONIOENCODING = 'utf-8'
         PYTHONLEGACYWINDOWSSTDIO = '1'
     }
@@ -33,55 +32,83 @@ pipeline {
                     echo.
                     echo Docker Compose version:
                     docker-compose --version || docker compose version
+                    echo.
+                    echo Checking psutil:
+                    pip list | findstr psutil || echo Installing psutil in next stage...
                 '''
             }
         }
         
-        stage('Local Python Training') {
+        stage('Install Dependencies') {
             steps {
-                echo 'Training model with local Python...'
+                echo 'Installing Python dependencies...'
                 bat '''
-                    echo Creating artifacts directory...
+                    echo Installing core ML packages...
+                    pip install scikit-learn pandas numpy joblib psutil
+                    
+                    echo Installing TensorBoard and visualization...
+                    pip install torch torchvision torchaudio tensorboard matplotlib --index-url https://download.pytorch.org/whl/cpu
+                    
+                    echo Installing API and web framework...
+                    pip install fastapi uvicorn streamlit requests pydantic
+                    
+                    echo Verification des installations...
+                    python -c "import sklearn; print('✅ scikit-learn:', sklearn.__version__)"
+                    python -c "import psutil; print('✅ psutil:', psutil.__version__)"
+                    python -c "import tensorboard; print('✅ tensorboard available')"
+                '''
+            }
+        }
+        
+        stage('Local Python Training with Monitoring') {
+            steps {
+                echo 'Training model with resource monitoring...'
+                bat '''
+                    echo Creating artifacts directories...
                     if not exist "artifacts" mkdir artifacts
+                    if not exist "artifacts\\tensorboard" mkdir artifacts\\tensorboard
+                    if not exist "serveur\\models" mkdir serveur\\models
                     
-                    echo Installing Python dependencies...
-                    pip install scikit-learn pandas numpy joblib || echo Some packages may already be installed
-                    
-                    echo Running training script locally...
+                    echo Running training script with CPU/RAM monitoring...
                     cd jenkins
                     set PYTHONIOENCODING=utf-8
-                    python train.py
+                    python train_with_monitoring.py
                     
-                    echo Moving trained model to artifacts...
-                    if exist "iris_model.pkl" (
-                        move iris_model.pkl "../artifacts/iris_model.pkl"
-                        echo Model moved to artifacts successfully
-                    ) else (
-                        echo No new model generated, using existing model if available
+                    echo Copying trained models to serveur directory...
+                    cd ..
+                    if exist "models\\*.pkl" (
+                        copy models\\*.pkl serveur\\models\\
+                        echo Models copied to serveur directory
+                    )
+                    if exist "jenkins\\*.pkl" (
+                        copy jenkins\\*.pkl serveur\\models\\
+                        copy jenkins\\*.pkl artifacts\\
+                        echo Models copied from jenkins directory
                     )
                     
-                    cd ..
-                    echo Checking artifacts directory...
+                    echo Checking generated files...
                     dir artifacts
+                    dir serveur\\models
+                    dir artifacts\\tensorboard /S
                     
-                    if exist "artifacts\\iris_model.pkl" (
-                        echo SUCCESS: Model available for deployment
+                    if exist "serveur\\models\\*.pkl" (
+                        echo SUCCESS: Models available for deployment
                     ) else (
-                        echo ERROR: No model available for deployment
+                        echo ERROR: No models available for deployment
                         exit /b 1
                     )
                 '''
             }
         }
         
-        stage('Copy Model to Server') {
+        stage('Build TensorBoard Image') {
             steps {
-                echo 'Copying model to server directory...'
+                echo 'Building custom TensorBoard image...'
                 bat '''
-                    if not exist "serveur\\models" mkdir serveur\\models
-                    copy artifacts\\iris_model.pkl serveur\\models\\iris_model.pkl
-                    echo Model copied successfully
-                    dir serveur\\models
+                    echo Building TensorBoard Docker image with monitoring support...
+                    docker build -t iris-tensorboard:latest -f Dockerfile.tensorboard .
+                    echo TensorBoard image built successfully
+                    docker images | findstr iris-tensorboard
                 '''
             }
         }
@@ -94,74 +121,78 @@ pipeline {
                     taskkill /F /IM python.exe 2>nul || echo No Python processes to kill
                     taskkill /F /IM uvicorn.exe 2>nul || echo No uvicorn processes to kill  
                     taskkill /F /IM streamlit.exe 2>nul || echo No streamlit processes to kill
+                    taskkill /F /IM tensorboard.exe 2>nul || echo No tensorboard processes to kill
                     
                     echo Stopping Docker containers...
                     docker-compose down --remove-orphans 2>nul || echo No containers to stop
-                    docker stop iris-serveur iris-client 2>nul || echo No manual containers to stop
-                    docker rm iris-serveur iris-client 2>nul || echo No manual containers to remove
+                    docker stop iris-serveur iris-client iris-tensorboard 2>nul || echo No manual containers to stop
+                    docker rm iris-serveur iris-client iris-tensorboard 2>nul || echo No manual containers to remove
+                    
+                    echo Cleaning up old images...
+                    docker image prune -f 2>nul || echo No images to prune
                     
                     echo Waiting for ports to be freed...
-                    timeout /t 5 /nobreak >nul 2>&1 || ping -n 5 127.0.0.1 >nul
+                    timeout /t 5 /nobreak >nul 2>&1
                 '''
             }
         }
         
         stage('Deploy Application') {
             steps {
-                echo 'Deploying application...'
+                echo 'Deploying application with TensorBoard monitoring...'
                 bat '''
-                    echo Starting Docker Compose deployment...
-                    docker-compose up -d --build && (
-                        echo Docker Compose deployment successful!
-                        timeout /t 15 /nobreak >nul 2>&1 || ping -n 15 127.0.0.1 >nul
-                        
-                        echo Checking container status...
-                        docker-compose ps
-                        
-                        echo Testing services...
-                        curl -f http://localhost:8000 --connect-timeout 10 && (
-                            echo API: RESPONDING
-                        ) || (
-                            echo API: NOT READY YET
-                        )
-                        
-                        curl -f http://localhost:8501 --connect-timeout 10 && (
-                            echo STREAMLIT: RESPONDING  
-                        ) || (
-                            echo STREAMLIT: NOT READY YET
-                        )
-                        
-                        echo Docker deployment completed
-                        
+                    echo Starting Docker Compose with TensorBoard...
+                    docker-compose up -d --build
+                    
+                    echo Waiting for services to start...
+                    timeout /t 25 /nobreak >nul 2>&1
+                    
+                    echo Checking container status...
+                    docker-compose ps
+                    
+                    echo Testing services availability...
+                    echo Testing API...
+                    curl -f http://localhost:8000 --connect-timeout 10 --max-time 15 && (
+                        echo ✅ API: RESPONDING
                     ) || (
-                        echo Docker Compose failed, using Python fallback...
-                        
-                        cd serveur
-                        pip install fastapi uvicorn joblib numpy scikit-learn pandas pydantic 2>nul || echo FastAPI deps installed
-                        start /B /MIN cmd /c "python -m uvicorn app:app --host 0.0.0.0 --port 8000"
-                        
-                        cd ..\\client
-                        pip install streamlit requests pandas numpy 2>nul || echo Streamlit deps installed
-                        start /B /MIN cmd /c "streamlit run app.py --server.port 8501 --server.address 0.0.0.0"
-                        
-                        cd ..
-                        timeout /t 20 /nobreak >nul 2>&1 || ping -n 20 127.0.0.1 >nul
-                        
-                        echo Python fallback completed
+                        echo ⚠️ API: NOT READY YET
                     )
+                    
+                    echo Testing Streamlit...
+                    curl -f http://localhost:8501 --connect-timeout 10 --max-time 15 && (
+                        echo ✅ STREAMLIT: RESPONDING  
+                    ) || (
+                        echo ⚠️ STREAMLIT: NOT READY YET
+                    )
+                    
+                    echo Testing TensorBoard...
+                    curl -f http://localhost:6006 --connect-timeout 10 --max-time 15 && (
+                        echo ✅ TENSORBOARD: RESPONDING  
+                    ) || (
+                        echo ⚠️ TENSORBOARD: NOT READY YET - waiting additional time...
+                        timeout /t 10 /nobreak >nul 2>&1
+                        curl -f http://localhost:6006 --connect-timeout 10 --max-time 15 && (
+                            echo ✅ TENSORBOARD: NOW RESPONDING
+                        ) || (
+                            echo ⚠️ TENSORBOARD: STILL STARTING
+                        )
+                    )
+                    
+                    echo Deployment completed
                 '''
             }
         }
         
         stage('Verify Deployment') {
             steps {
-                echo 'Verifying deployment...'
+                echo 'Verifying deployment and resource monitoring...'
                 script {
                     def apiWorking = false
                     def streamlitWorking = false
+                    def tensorboardWorking = false
                     
                     try {
-                        bat 'curl -f http://localhost:8000 --connect-timeout 5 --max-time 10'
+                        bat 'curl -f http://localhost:8000 --connect-timeout 10 --max-time 15'
                         apiWorking = true
                         echo "✅ API is responding"
                     } catch (Exception e) {
@@ -169,46 +200,109 @@ pipeline {
                     }
                     
                     try {
-                        bat 'curl -f http://localhost:8501 --connect-timeout 5 --max-time 10'
+                        bat 'curl -f http://localhost:8501 --connect-timeout 10 --max-time 15'
                         streamlitWorking = true
                         echo "✅ Streamlit is responding"
                     } catch (Exception e) {
                         echo "⚠️ Streamlit not responding"
                     }
                     
-                    if (apiWorking || streamlitWorking) {
-                        echo "🎉 Deployment successful - at least one service is running!"
+                    try {
+                        bat 'curl -f http://localhost:6006 --connect-timeout 10 --max-time 15'
+                        tensorboardWorking = true
+                        echo "✅ TensorBoard is responding with resource monitoring"
+                    } catch (Exception e) {
+                        echo "⚠️ TensorBoard not responding"
+                    }
+                    
+                    def workingServices = []
+                    if (apiWorking) workingServices.add("API")
+                    if (streamlitWorking) workingServices.add("Streamlit")
+                    if (tensorboardWorking) workingServices.add("TensorBoard")
+                    
+                    echo "📊 Services status: ${workingServices.join(', ')}"
+                    
+                    if (workingServices.size() >= 2) {
+                        echo "🎉 Deployment successful - services running: ${workingServices}"
                         currentBuild.result = 'SUCCESS'
-                    } else {
-                        echo "⚠️ Services may still be starting up..."
+                    } else if (workingServices.size() >= 1) {
+                        echo "⚠️ Limited deployment - only ${workingServices} running"
                         currentBuild.result = 'UNSTABLE'
+                    } else {
+                        echo "❌ No services responding"
+                        currentBuild.result = 'FAILURE'
                     }
                 }
+            }
+        }
+        
+        stage('Generate Monitoring Report') {
+            steps {
+                echo 'Generating resource monitoring report...'
+                bat '''
+                    echo.
+                    echo 📊 RESOURCE MONITORING REPORT
+                    echo ============================
+                    echo.
+                    echo TensorBoard Logs Structure:
+                    if exist "artifacts\\tensorboard" (
+                        dir artifacts\\tensorboard /S
+                        echo.
+                        echo Available TensorBoard Logs:
+                        for /d %%i in ("artifacts\\tensorboard\\*") do (
+                            echo - %%i
+                        )
+                    ) else (
+                        echo No TensorBoard logs found
+                    )
+                    
+                    echo.
+                    echo Container Resource Usage:
+                    docker stats --no-stream --format "table {{.Container}}\\t{{.CPUPerc}}\\t{{.MemUsage}}\\t{{.NetIO}}" 2>nul || echo Docker stats not available
+                    
+                    echo.
+                    echo System Resource Status:
+                    echo CPU Usage: 
+                    wmic cpu get loadpercentage /value 2>nul | findstr LoadPercentage || echo CPU info not available
+                    echo Memory Usage:
+                    systeminfo | findstr /C:"Total Physical Memory" /C:"Available Physical Memory" 2>nul || echo Memory info not available
+                '''
             }
         }
     }
     
     post {
         always {
-            echo 'Archiving artifacts...'
+            echo 'Archiving artifacts and logs...'
             archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'serveur/models/**/*', allowEmptyArchive: true
             
             bat '''
                 echo.
-                echo ===== DEPLOYMENT STATUS =====
+                echo ===== DEPLOYMENT COMPLETE =====
                 echo.
-                echo Docker containers:
-                docker ps | findstr iris || echo No Docker containers running
+                echo Docker containers status:
+                docker-compose ps || echo Docker compose not available
                 echo.
-                echo Port status:
-                netstat -an | findstr :8000 && echo "Port 8000: IN USE" || echo "Port 8000: FREE"
-                netstat -an | findstr :8501 && echo "Port 8501: IN USE" || echo "Port 8501: FREE"
+                echo Port usage:
+                netstat -an | findstr ":8000" && echo "Port 8000 (API): IN USE" || echo "Port 8000 (API): FREE"
+                netstat -an | findstr ":8501" && echo "Port 8501 (Streamlit): IN USE" || echo "Port 8501 (Streamlit): FREE"
+                netstat -an | findstr ":6006" && echo "Port 6006 (TensorBoard): IN USE" || echo "Port 6006 (TensorBoard): FREE"
                 echo.
-                echo Your application should be available at:
-                echo  - Streamlit UI: http://localhost:8501
-                echo  - FastAPI: http://localhost:8000
-                echo  - API Docs: http://localhost:8000/docs
-                echo ===============================
+                echo TensorBoard monitoring available at:
+                echo http://localhost:6006
+                echo.
+                echo Application URLs:
+                echo 🌐 Streamlit UI: http://localhost:8501
+                echo 🔗 FastAPI: http://localhost:8000
+                echo 📚 API Docs: http://localhost:8000/docs
+                echo 📊 TensorBoard: http://localhost:6006
+                echo.
+                echo TensorBoard Features:
+                echo - CPU/RAM monitoring during training
+                echo - Model performance comparison
+                echo - Confusion matrices
+                echo - Resource usage over time
             '''
         }
         
@@ -221,17 +315,24 @@ pipeline {
                 echo        DEPLOYMENT SUCCESS!
                 echo =========================================
                 echo.
-                echo Your Iris ML Application is ready!
+                echo 🌸 Iris ML Application with Resource Monitoring
                 echo.
                 echo 🌐 Access URLs:
                 echo  - Main App: http://localhost:8501  
                 echo  - API: http://localhost:8000
                 echo  - Docs: http://localhost:8000/docs
+                echo  - TensorBoard: http://localhost:6006
+                echo.
+                echo 📊 Resource Monitoring Features:
+                echo  - Real-time CPU usage during training
+                echo  - Memory consumption tracking
+                echo  - Model performance comparison
+                echo  - Training metrics visualization
                 echo.
                 echo 🧪 Test prediction:
-                echo curl -X POST "http://localhost:8000/predict" ^
-                echo      -H "Content-Type: application/json" ^
-                echo      -d "{\\"SepalLengthCm\\": 5.1, \\"SepalWidthCm\\": 3.5, \\"PetalLengthCm\\": 1.4, \\"PetalWidthCm\\": 0.2}"
+                curl -X POST "http://localhost:8000/predict" ^
+                  -H "Content-Type: application/json" ^
+                  -d "{\\"SepalLengthCm\\": 5.1, \\"SepalWidthCm\\": 3.5, \\"PetalLengthCm\\": 1.4, \\"PetalWidthCm\\": 0.2}" 2>nul || echo Test command ready
                 echo.
                 echo 🛑 To stop: docker-compose down
                 echo =========================================
@@ -247,10 +348,20 @@ pipeline {
                 echo    DEPLOYMENT COMPLETED WITH WARNINGS
                 echo =========================================
                 echo.
-                echo Services may still be starting up.
+                echo Some services may still be starting up.
                 echo Please check manually:
                 echo  - http://localhost:8501
-                echo  - http://localhost:8000
+                echo  - http://localhost:8000  
+                echo  - http://localhost:6006
+                echo.
+                echo TensorBoard resource monitoring available at:
+                echo  - http://localhost:6006
+                echo.
+                echo Check Docker containers:
+                echo docker-compose ps
+                echo.
+                echo Check container logs:
+                echo docker-compose logs
                 echo =========================================
             '''
         }
@@ -264,8 +375,16 @@ pipeline {
                 echo         PIPELINE FAILURE
                 echo =========================================
                 echo.
-                echo Check the logs above for errors.
-                echo Verify Docker and Python are working.
+                echo Troubleshooting steps:
+                echo 1. Check Docker is running: docker --version
+                echo 2. Check Python dependencies: pip list
+                echo 3. Check training logs above
+                echo 4. Verify data files exist
+                echo 5. Check port availability
+                echo.
+                echo Cleanup commands:
+                echo docker-compose down
+                echo docker system prune -f
                 echo =========================================
             '''
         }

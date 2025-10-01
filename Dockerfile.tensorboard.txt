@@ -1,0 +1,13 @@
+# Dockerfile.tensorboard
+FROM tensorflow/tensorflow:2.13.0
+
+# Installer psutil pour le monitoring
+RUN pip install psutil matplotlib
+
+WORKDIR /app
+
+# Exposer le port TensorBoard
+EXPOSE 6006
+
+# Commande par défaut
+CMD ["tensorboard", "--logdir=/tensorboard_logs", "--host=0.0.0.0", "--port=6006", "--reload_interval=5"]
