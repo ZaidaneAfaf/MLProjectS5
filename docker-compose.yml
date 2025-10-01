@@ -20,7 +20,7 @@ services:
       context: ./client
       dockerfile: Dockerfile
     ports:
-      - "8502:8501"
+      - "8501:8501"
     volumes:
       - ./client:/app
     depends_on:
