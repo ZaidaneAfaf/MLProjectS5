@@ -28,10 +28,10 @@ pipeline {
     DOCKER_IMAGE = "${APP_NAME}"
 
     // Azure (fixés sur tes ressources existantes)
-    AZ_LOCATION  = 'germanywestcentral'      // adapte si ton RG est ailleurs
-    AZ_RG        = 'ml_rg'                   // <--- TON GROUPE DE RESSOURCES
-    AZ_PLAN      = 'plan-jenkins'            // <--- ton App Service Plan existant
-    AZ_WEBAPP    = 'app-jenkis-ml'           // <--- ton Web App existant
+    AZ_LOCATION  = 'germanywestcentral'
+    AZ_RG        = 'ml_rg'
+    AZ_PLAN      = 'plan-jenkins'
+    AZ_WEBAPP    = 'app-jenkis-ml'
 
     // ACR
     AZ_ACR_NAME  = 'mlregitery123'
@@ -169,6 +169,9 @@ pipeline {
             docker push %IMG_ACR_L%
             IF ERRORLEVEL 1 exit /b 1
           )
+
+          rem --- Check rapide des tags dans l'ACR (non bloquant)
+          az acr repository show-tags -n %AZ_ACR_NAME% --repository %APP_NAME% -o table
         '''
       }
     }
@@ -189,7 +192,11 @@ pipeline {
 
                 az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=80
                 az webapp restart -g %AZ_RG% -n %AZ_WEBAPP%
+
+                rem --- Récupère & nettoie le FQDN
                 az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query defaultHostName -o tsv > webapp_fqdn.txt
+                for /f "usebackq tokens=* delims=" %%i in ("webapp_fqdn.txt") do set FQDN=%%i
+                echo %FQDN%>webapp_fqdn.txt
               '''
             }
           } else { // managed-identity (recommandé)
@@ -211,7 +218,11 @@ pipeline {
 
                 az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=80
                 az webapp restart -g %AZ_RG% -n %AZ_WEBAPP%
+
+                rem --- Récupère & nettoie le FQDN
                 az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query defaultHostName -o tsv > webapp_fqdn.txt
+                for /f "usebackq tokens=* delims=" %%i in ("webapp_fqdn.txt") do set FQDN=%%i
+                echo %FQDN%>webapp_fqdn.txt
               '''
             }
           }
@@ -226,6 +237,7 @@ pipeline {
         bat '''
           if not exist webapp_fqdn.txt (echo "No FQDN file" & exit /b 0)
           set /p FQDN=<webapp_fqdn.txt
+          for /f "tokens=* delims= " %%a in ("%FQDN%") do set FQDN=%%a
           echo Testing http://%FQDN%/
 
           powershell -NoProfile -Command "Start-Sleep -Seconds 15"
@@ -265,9 +277,10 @@ pipeline {
       bat '''
         if exist webapp_fqdn.txt (
           set /p FQDN=<webapp_fqdn.txt
+          for /f "tokens=* delims= " %%a in ("%FQDN%") do set FQDN=%%a
           echo Open:   http://%FQDN%/
           echo Root:   http://%FQDN%/
-          echo Predict (POST): http://%FQDN%/predict
+          echo Predict ^(POST^): http://%FQDN%/predict
         ) else (
           echo FQDN not found (open Azure portal).
         )
