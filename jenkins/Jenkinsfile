@@ -12,7 +12,7 @@ pipeline {
 
   /*************** PARAMÈTRES MODULAIRES ***************/
   parameters {
-    choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Environnement cible (n’influence plus les noms des ressources existantes)')
+    choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Environnement cible (informative)')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Tag image (vide = BUILD_NUMBER)')
     booleanParam(name: 'PUSH_LATEST', defaultValue: true, description: 'Pousser aussi :latest')
     choice(name: 'DEPLOY_METHOD', choices: ['acr-admin', 'managed-identity'], description: 'Méthode de pull ACR par le Web App')
@@ -27,11 +27,11 @@ pipeline {
     APP_NAME     = 'iris-ml-app'
     DOCKER_IMAGE = "${APP_NAME}"
 
-    // Azure (noms EXACTS de tes ressources existantes)
-    AZ_LOCATION  = 'germanywestcentral'
-    AZ_RG        = 'ml_rg'            // ← ton vrai Resource Group
-    AZ_PLAN      = 'plan-jenkins'     // ← ton vrai App Service Plan
-    AZ_WEBAPP    = 'app-jenkis-ml'    // ← ton vrai Web App
+    // Azure (fixés sur tes ressources existantes)
+    AZ_LOCATION  = 'germanywestcentral'      // adapte si ton RG est ailleurs
+    AZ_RG        = 'ml_rg'                   // <--- TON GROUPE DE RESSOURCES
+    AZ_PLAN      = 'plan-jenkins'            // <--- ton App Service Plan existant
+    AZ_WEBAPP    = 'app-jenkis-ml'           // <--- ton Web App existant
 
     // ACR
     AZ_ACR_NAME  = 'mlregitery123'
@@ -177,6 +177,7 @@ pipeline {
       steps {
         script {
           if (params.DEPLOY_METHOD == 'acr-admin') {
+            // Utilise un credential Jenkins ID "acr-admin" (username/password ACR)
             withCredentials([usernamePassword(credentialsId: 'acr-admin', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
               bat '''
                 az webapp config container set -g %AZ_RG% -n %AZ_WEBAPP% ^
@@ -191,7 +192,7 @@ pipeline {
                 az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query defaultHostName -o tsv > webapp_fqdn.txt
               '''
             }
-          } else { // managed-identity
+          } else { // managed-identity (recommandé)
             withCredentials([string(credentialsId: 'az-subscription-id', variable: 'AZ_SUBSCRIPTION_ID')]) {
               bat '''
                 az webapp identity assign -g %AZ_RG% -n %AZ_WEBAPP%
@@ -233,7 +234,6 @@ pipeline {
           powershell -NoProfile -Command ^
             "$ErrorActionPreference='SilentlyContinue';" ^
             "try{$r=Invoke-WebRequest http://%FQDN%/ -UseBasicParsing; if($r.StatusCode -ne 200){exit 2}}catch{exit 2}"
-
           if ERRORLEVEL 2 (
             echo "WARN: GET / failed on Azure"
             IF "%FAIL_ON_SMOKE%"=="true" exit /b 1
@@ -244,7 +244,6 @@ pipeline {
             "$body=@{SepalLengthCm=5.1;SepalWidthCm=3.5;PetalLengthCm=1.4;PetalWidthCm=0.2}|ConvertTo-Json;" ^
             "$ErrorActionPreference='SilentlyContinue';" ^
             "try{$r=Invoke-WebRequest http://%FQDN%/predict -UseBasicParsing -ContentType 'application/json' -Method POST -Body $body; if($r.StatusCode -ne 200){exit 3}}catch{exit 3}"
-
           if ERRORLEVEL 3 (
             echo "WARN: POST /predict failed on Azure"
             IF "%FAIL_ON_SMOKE%"=="true" exit /b 1
