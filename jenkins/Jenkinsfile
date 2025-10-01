@@ -2,11 +2,8 @@ pipeline {
     agent any
     
     environment {
-        DOCKER_IMAGE = 'iris-train'
-        CONTAINER_NAME = 'iris-container'
-        DOCKER_IMAGE_TAG = "${DOCKER_IMAGE}:${BUILD_NUMBER}"
-        PYTHONIOENCODING = 'utf-8'
-        PYTHONLEGACYWINDOWSSTDIO = '1'
+        PYTHON_VERSION = '3.13.5'
+        DOCKER_COMPOSE_VERSION = 'v2.33.1'
     }
     
     stages {
@@ -112,7 +109,6 @@ pipeline {
                         echo CMD ["tensorboard", "--logdir=/tensorboard_logs", "--host=0.0.0.0", "--port=6006", "--reload_interval=5"] >> Dockerfile.tensorboard
                         echo Dockerfile.tensorboard created
                     )
-                    
                     dir Dockerfile.tensorboard*
                 '''
             }
@@ -125,7 +121,6 @@ pipeline {
                     echo Building TensorBoard Docker image...
                     docker build -t iris-tensorboard:latest -f Dockerfile.tensorboard .
                     echo TensorBoard image built successfully
-                    
                     docker images | findstr iris-tensorboard
                 '''
             }
@@ -150,7 +145,7 @@ pipeline {
                     docker image prune -f 2>nul || echo No images to prune
                     
                     echo Waiting for ports to be freed...
-                    timeout /t 5 /nobreak >nul 2>&1
+                    timeout /t 5 /nobreak 1>nul 2>&1
                     exit /b 0
                 '''
             }
@@ -164,7 +159,7 @@ pipeline {
                     docker-compose up -d --build
                     
                     echo Waiting for services to start...
-                    timeout /t 30 /nobreak >nul 2>&1
+                    timeout /t 90 /nobreak 1>nul 2>&1
                     
                     echo Checking container status...
                     docker-compose ps
@@ -176,52 +171,80 @@ pipeline {
         
         stage('Verify Deployment') {
             steps {
-                echo 'Verifying deployment...'
+                echo 'Verifying deployment with retries...'
                 script {
-                    def apiWorking = false
-                    def streamlitWorking = false
-                    def tensorboardWorking = false
+                    def maxRetries = 15
+                    def retryDelay = 10
                     
-                    try {
-                        bat 'curl -f http://localhost:8000 --connect-timeout 10 --max-time 15'
-                        apiWorking = true
-                        echo "API is responding"
-                    } catch (Exception e) {
-                        echo "API not responding yet"
+                    // Check API
+                    echo 'Checking FastAPI service...'
+                    def apiOk = false
+                    for (int i = 0; i < maxRetries; i++) {
+                        def apiStatus = bat(
+                            script: "curl -f http://localhost:8000 --connect-timeout 5 --max-time 10",
+                            returnStatus: true
+                        )
+                        if (apiStatus == 0) {
+                            echo "API is responding"
+                            apiOk = true
+                            break
+                        }
+                        echo "Waiting for API... retry ${i+1}/${maxRetries}"
+                        bat "timeout /t ${retryDelay} /nobreak 1>nul 2>&1"
                     }
                     
-                    try {
-                        bat 'curl -f http://localhost:8501 --connect-timeout 10 --max-time 15'
-                        streamlitWorking = true
-                        echo "Streamlit is responding"
-                    } catch (Exception e) {
-                        echo "Streamlit not responding yet"
+                    // Check Streamlit
+                    echo 'Checking Streamlit service...'
+                    def streamlitOk = false
+                    for (int i = 0; i < maxRetries; i++) {
+                        def streamlitStatus = bat(
+                            script: "curl -f http://localhost:8501 --connect-timeout 5 --max-time 10",
+                            returnStatus: true
+                        )
+                        if (streamlitStatus == 0) {
+                            echo "Streamlit is responding"
+                            streamlitOk = true
+                            break
+                        }
+                        echo "Waiting for Streamlit... retry ${i+1}/${maxRetries}"
+                        bat "timeout /t ${retryDelay} /nobreak 1>nul 2>&1"
                     }
                     
-                    try {
-                        bat 'curl -f http://localhost:6006 --connect-timeout 10 --max-time 15'
-                        tensorboardWorking = true
-                        echo "TensorBoard is responding"
-                    } catch (Exception e) {
-                        echo "TensorBoard not responding yet"
+                    // Check TensorBoard
+                    echo 'Checking TensorBoard service...'
+                    def tensorboardOk = false
+                    for (int i = 0; i < maxRetries; i++) {
+                        def tensorboardStatus = bat(
+                            script: "curl -f http://localhost:6006 --connect-timeout 5 --max-time 10",
+                            returnStatus: true
+                        )
+                        if (tensorboardStatus == 0) {
+                            echo "TensorBoard is responding"
+                            tensorboardOk = true
+                            break
+                        }
+                        echo "Waiting for TensorBoard... retry ${i+1}/${maxRetries}"
+                        bat "timeout /t ${retryDelay} /nobreak 1>nul 2>&1"
                     }
                     
-                    def workingServices = []
-                    if (apiWorking) workingServices.add("API")
-                    if (streamlitWorking) workingServices.add("Streamlit")
-                    if (tensorboardWorking) workingServices.add("TensorBoard")
+                    // Build status report
+                    def servicesStatus = []
+                    if (apiOk) servicesStatus.add("API")
+                    if (streamlitOk) servicesStatus.add("Streamlit")
+                    if (tensorboardOk) servicesStatus.add("TensorBoard")
                     
-                    echo "Services status: ${workingServices.join(', ')}"
+                    echo "Services status: ${servicesStatus.join(', ')}"
                     
-                    if (workingServices.size() >= 2) {
-                        echo "Deployment successful - services running: ${workingServices}"
+                    // Determine build result
+                    if (apiOk && streamlitOk && tensorboardOk) {
+                        echo "All services are responding correctly"
                         currentBuild.result = 'SUCCESS'
-                    } else if (workingServices.size() >= 1) {
-                        echo "Limited deployment - only ${workingServices} running"
+                    } else if (streamlitOk || apiOk) {
+                        echo "Partial deployment - some services running"
                         currentBuild.result = 'UNSTABLE'
                     } else {
-                        echo "Services are starting - containers deployed successfully"
-                        currentBuild.result = 'UNSTABLE'
+                        echo "Deployment failed - no services responding"
+                        error("Deployment verification failed")
                     }
                 }
             }
@@ -231,8 +254,8 @@ pipeline {
     post {
         always {
             echo 'Archiving artifacts and logs...'
+            archiveArtifacts artifacts: 'models/**/*.pkl', allowEmptyArchive: true
             archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
-            archiveArtifacts artifacts: 'serveur/models/**/*', allowEmptyArchive: true
             
             bat '''
                 echo.
@@ -242,9 +265,9 @@ pipeline {
                 docker-compose ps || echo Docker compose not available
                 echo.
                 echo Port usage:
-                netstat -an | findstr ":8000" >nul && echo Port 8000 (API): IN USE || echo Port 8000 (API): FREE
-                netstat -an | findstr ":8501" >nul && echo Port 8501 (Streamlit): IN USE || echo Port 8501 (Streamlit): FREE
-                netstat -an | findstr ":6006" >nul && echo Port 6006 (TensorBoard): IN USE || echo Port 6006 (TensorBoard): FREE
+                netstat -an | findstr ":8000" 1>nul && echo Port 8000 (API): IN USE || echo Port 8000 (API): FREE
+                netstat -an | findstr ":8501" 1>nul && echo Port 8501 (Streamlit): IN USE || echo Port 8501 (Streamlit): FREE
+                netstat -an | findstr ":6006" 1>nul && echo Port 6006 (TensorBoard): IN USE || echo Port 6006 (TensorBoard): FREE
                 echo.
                 echo Application URLs:
                 echo Streamlit UI: http://localhost:8501
@@ -257,42 +280,31 @@ pipeline {
         
         success {
             echo 'Pipeline completed successfully!'
-            
             bat '''
                 echo.
                 echo =========================================
-                echo        DEPLOYMENT SUCCESS!
+                echo    DEPLOYMENT SUCCESSFUL
                 echo =========================================
                 echo.
-                echo Iris ML Application with TensorBoard
-                echo.
-                echo Access URLs:
-                echo  - Main App: http://localhost:8501  
-                echo  - API: http://localhost:8000
-                echo  - Docs: http://localhost:8000/docs
+                echo All services are running:
+                echo  - Streamlit UI: http://localhost:8501
+                echo  - FastAPI: http://localhost:8000
+                echo  - API Docs: http://localhost:8000/docs
                 echo  - TensorBoard: http://localhost:6006
                 echo.
-                echo TensorBoard Features:
-                echo  - Real-time CPU/RAM monitoring during training
-                echo  - Model performance comparison
-                echo  - Confusion matrices visualization
-                echo.
-                echo To stop: docker-compose down
                 echo =========================================
             '''
         }
         
         unstable {
             echo 'Pipeline completed with warnings'
-            
             bat '''
                 echo.
                 echo =========================================
                 echo    DEPLOYMENT COMPLETED WITH WARNINGS
                 echo =========================================
                 echo.
-                echo Containers are deployed and starting up.
-                echo Services may need additional time to initialize.
+                echo Some services may need additional time to initialize.
                 echo.
                 echo Please check manually:
                 echo  - http://localhost:8501
@@ -307,22 +319,19 @@ pipeline {
         
         failure {
             echo 'Pipeline failed'
-            
             bat '''
                 echo.
                 echo =========================================
-                echo         PIPELINE FAILURE
+                echo    DEPLOYMENT FAILED
                 echo =========================================
                 echo.
-                echo Troubleshooting steps:
-                echo 1. Check Docker is running
-                echo 2. Check Python dependencies
-                echo 3. Check training logs above
-                echo 4. Verify data files exist
+                echo Check Docker logs:
+                docker-compose logs --tail=50
                 echo.
-                echo Cleanup commands:
-                echo docker-compose down
+                echo Check container status:
+                docker-compose ps
                 echo =========================================
+                exit /b 0
             '''
         }
     }
