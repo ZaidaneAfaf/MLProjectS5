@@ -12,12 +12,11 @@ pipeline {
 
   /*************** PARAMÈTRES MODULAIRES ***************/
   parameters {
-    choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Environnement cible')
+    choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Environnement cible (n’influence plus les noms des ressources existantes)')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Tag image (vide = BUILD_NUMBER)')
     booleanParam(name: 'PUSH_LATEST', defaultValue: true, description: 'Pousser aussi :latest')
     choice(name: 'DEPLOY_METHOD', choices: ['acr-admin', 'managed-identity'], description: 'Méthode de pull ACR par le Web App')
     booleanParam(name: 'SKIP_TRAIN', defaultValue: false, description: 'Sauter l’entrainement si artifacts/iris_model.pkl déjà présent')
-    // NEW: permet d’activer un smoke test après déploiement (non bloquant par défaut)
     booleanParam(name: 'RUN_SMOKE_AFTER_DEPLOY', defaultValue: false, description: 'Tester / et /predict après déploiement (peut échouer le build)')
     booleanParam(name: 'FAIL_ON_SMOKE', defaultValue: false, description: 'Si vrai et RUN_SMOKE_AFTER_DEPLOY=true, échoue en cas d’erreur')
   }
@@ -28,11 +27,11 @@ pipeline {
     APP_NAME     = 'iris-ml-app'
     DOCKER_IMAGE = "${APP_NAME}"
 
-    // Azure
+    // Azure (noms EXACTS de tes ressources existantes)
     AZ_LOCATION  = 'germanywestcentral'
-    AZ_RG        = "ml-${params.ENV}"
-    AZ_PLAN      = "plan-ml-linux-${params.ENV}"
-    AZ_WEBAPP    = "app-jenkis-ml-${params.ENV}"
+    AZ_RG        = 'ml_rg'            // ← ton vrai Resource Group
+    AZ_PLAN      = 'plan-jenkins'     // ← ton vrai App Service Plan
+    AZ_WEBAPP    = 'app-jenkis-ml'    // ← ton vrai Web App
 
     // ACR
     AZ_ACR_NAME  = 'mlregitery123'
@@ -120,9 +119,6 @@ pipeline {
       }
     }
 
-    // ❌ REMOVED: Local Test
-    // On passe directement au push + déploiement
-
     stage('Azure Login + Ensure Resources') {
       steps {
         echo '🔐 Azure login (Service Principal) & ensure RG/ACR/Plan/WebApp...'
@@ -184,10 +180,10 @@ pipeline {
             withCredentials([usernamePassword(credentialsId: 'acr-admin', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
               bat '''
                 az webapp config container set -g %AZ_RG% -n %AZ_WEBAPP% ^
-                  --docker-custom-image-name %IMG_ACR% ^
-                  --docker-registry-server-url https://%AZ_ACR_LOGIN% ^
-                  --docker-registry-server-user %ACR_USERNAME% ^
-                  --docker-registry-server-password %ACR_PASSWORD%
+                  --container-image-name %IMG_ACR% ^
+                  --container-registry-url https://%AZ_ACR_LOGIN% ^
+                  --container-registry-user %ACR_USERNAME% ^
+                  --container-registry-password %ACR_PASSWORD%
                 IF ERRORLEVEL 1 exit /b 1
 
                 az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=80
@@ -208,8 +204,8 @@ pipeline {
                 IF ERRORLEVEL 1 exit /b 1
 
                 az webapp config container set -g %AZ_RG% -n %AZ_WEBAPP% ^
-                  --docker-custom-image-name %IMG_ACR% ^
-                  --docker-registry-server-url https://%AZ_ACR_LOGIN%
+                  --container-image-name %IMG_ACR% ^
+                  --container-registry-url https://%AZ_ACR_LOGIN%
                 IF ERRORLEVEL 1 exit /b 1
 
                 az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=80
@@ -231,7 +227,6 @@ pipeline {
           set /p FQDN=<webapp_fqdn.txt
           echo Testing http://%FQDN%/
 
-          rem attend un peu que le conteneur soit chaud
           powershell -NoProfile -Command "Start-Sleep -Seconds 15"
 
           rem GET /
@@ -244,7 +239,7 @@ pipeline {
             IF "%FAIL_ON_SMOKE%"=="true" exit /b 1
           )
 
-          rem POST /predict avec 4 features CamelCase
+          rem POST /predict
           powershell -NoProfile -Command ^
             "$body=@{SepalLengthCm=5.1;SepalWidthCm=3.5;PetalLengthCm=1.4;PetalWidthCm=0.2}|ConvertTo-Json;" ^
             "$ErrorActionPreference='SilentlyContinue';" ^
@@ -292,7 +287,7 @@ pipeline {
           echo Root:   http://%FQDN%/
           echo Predict (POST): http://%FQDN%/predict
         ) else (
-          echo "FQDN not found (open Azure portal)."
+          echo FQDN not found (open Azure portal).
         )
       '''
     }
