@@ -17,6 +17,8 @@ pipeline {
     booleanParam(name: 'PUSH_LATEST', defaultValue: true, description: 'Pousser aussi :latest')
     choice(name: 'DEPLOY_METHOD', choices: ['acr-admin', 'managed-identity'], description: 'Méthode de pull ACR par le Web App')
     booleanParam(name: 'SKIP_TRAIN', defaultValue: false, description: 'Sauter l’entrainement si artifacts/iris_model.pkl déjà présent')
+    booleanParam(name: 'RUN_SMOKE_AFTER_DEPLOY', defaultValue: false, description: 'Tester / et /predict après déploiement (peut échouer le build)')
+    booleanParam(name: 'FAIL_ON_SMOKE', defaultValue: false, description: 'Si vrai et RUN_SMOKE_AFTER_DEPLOY=true, échoue en cas d’erreur')
   }
 
   /*************** VARIABLES D’ENVIRONNEMENT ***************/
@@ -27,9 +29,9 @@ pipeline {
 
     // Azure (noms EXACTS de tes ressources existantes)
     AZ_LOCATION  = 'germanywestcentral'
-    AZ_RG        = 'ml_rg'          // ← ton Resource Group
-    AZ_PLAN      = 'plan-jenkins'   // ← ton App Service Plan
-    AZ_WEBAPP    = 'app-jenkis-ml'  // ← ta Web App
+    AZ_RG        = 'ml_rg'            // ← ton vrai Resource Group
+    AZ_PLAN      = 'plan-jenkins'     // ← ton vrai App Service Plan
+    AZ_WEBAPP    = 'app-jenkis-ml'    // ← ton vrai Web App
 
     // ACR
     AZ_ACR_NAME  = 'mlregitery123'
@@ -216,23 +218,39 @@ pipeline {
       }
     }
 
-    stage('Notes') {
+    stage('Smoke Test on Azure (optional)') {
+      when { expression { return params.RUN_SMOKE_AFTER_DEPLOY } }
       steps {
-        echo '📋 Preparing deploy notes...'
+        echo '🩺 Azure smoke test (/, /predict) — optionnel'
         bat '''
-          >  deploy.txt echo # DEPLOY INFO
-          >> deploy.txt echo Env:^ %ENV%
-          >> deploy.txt echo Image:^ %IMG_ACR%
-          >> deploy.txt echo WebApp:^ %AZ_WEBAPP%
-          >> deploy.txt echo RG:^ %AZ_RG%
-          >> deploy.txt echo Location:^ %AZ_LOCATION%
-          >> deploy.txt echo.
-          >> deploy.txt echo URL:
-          if exist webapp_fqdn.txt (
-            type webapp_fqdn.txt >> deploy.txt
-          ) else (
-            echo N/A >> deploy.txt
+          if not exist webapp_fqdn.txt (echo "No FQDN file" & exit /b 0)
+          set /p FQDN=<webapp_fqdn.txt
+          echo Testing http://%FQDN%/
+
+          powershell -NoProfile -Command "Start-Sleep -Seconds 15"
+
+          rem GET /
+          powershell -NoProfile -Command ^
+            "$ErrorActionPreference='SilentlyContinue';" ^
+            "try{$r=Invoke-WebRequest http://%FQDN%/ -UseBasicParsing; if($r.StatusCode -ne 200){exit 2}}catch{exit 2}"
+
+          if ERRORLEVEL 2 (
+            echo "WARN: GET / failed on Azure"
+            IF "%FAIL_ON_SMOKE%"=="true" exit /b 1
           )
+
+          rem POST /predict
+          powershell -NoProfile -Command ^
+            "$body=@{SepalLengthCm=5.1;SepalWidthCm=3.5;PetalLengthCm=1.4;PetalWidthCm=0.2}|ConvertTo-Json;" ^
+            "$ErrorActionPreference='SilentlyContinue';" ^
+            "try{$r=Invoke-WebRequest http://%FQDN%/predict -UseBasicParsing -ContentType 'application/json' -Method POST -Body $body; if($r.StatusCode -ne 200){exit 3}}catch{exit 3}"
+
+          if ERRORLEVEL 3 (
+            echo "WARN: POST /predict failed on Azure"
+            IF "%FAIL_ON_SMOKE%"=="true" exit /b 1
+          )
+
+          echo "✅ Azure smoke test passed (non-blocking)"
         '''
       }
     }
