@@ -84,6 +84,21 @@ st.markdown(
         font-size: 30px;
         margin-bottom: 20px;
     }
+
+    /* Force le texte en noir */
+    .stMarkdown, .stMarkdown p, .stMarkdown li, .stMarkdown h1, 
+    .stMarkdown h2, .stMarkdown h3, .stMarkdown div, 
+    p, span, div, li, ul {
+        color: #333 !important;
+    }
+
+    .centered-content * {
+        color: #333 !important;
+    }
+
+    .centered-content b {
+        color: #FF6F61 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True
