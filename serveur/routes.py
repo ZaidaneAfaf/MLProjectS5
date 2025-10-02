@@ -1,6 +1,5 @@
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, UploadFile, File, Query
 from fastapi.responses import JSONResponse
-from fastapi import Query
 import joblib
 import numpy as np
 import os
@@ -9,50 +8,87 @@ from sklearn.metrics import accuracy_score, confusion_matrix, precision_score, r
 
 router = APIRouter()
 
-# 🔹 Correction : __file__ au lieu de _file_
+# Configuration des chemins
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
-
-# 🔹 S'assurer que le dossier models existe
 os.makedirs(MODELS_DIR, exist_ok=True)
 
-# 🔹 Charger tous les modèles disponibles au démarrage
+# Charger tous les modèles disponibles au démarrage
 MODELS_CACHE = {}
-for name in ["svm", "random_forest", "logistic_regression"]:
-    path = os.path.join(MODELS_DIR, f"{name}_iris_model.pkl")
-    if os.path.exists(path):
-        MODELS_CACHE[name] = joblib.load(path)
+MODEL_FILES = {
+    "svm": "svm_iris_model.pkl",
+    "random_forest": "random_forest_iris_model.pkl",
+    "logistic_regression": "logistic_regression_iris_model.pkl"
+}
 
-# 🔹 Fonction pour charger dynamiquement les modèles
+print("\n" + "="*60)
+print("CHARGEMENT DES MODELES")
+print("="*60)
+
+for name, filename in MODEL_FILES.items():
+    path = os.path.join(MODELS_DIR, filename)
+    if os.path.exists(path):
+        try:
+            loaded_obj = joblib.load(path)
+            
+            # Verification: c'est bien un modele sklearn
+            if hasattr(loaded_obj, 'predict') and hasattr(loaded_obj, 'predict_proba'):
+                MODELS_CACHE[name] = loaded_obj
+                print(f"✅ Modele {name} charge avec succes (type: {type(loaded_obj).__name__})")
+            else:
+                print(f"⚠️  {filename} n'est pas un modele sklearn valide (type: {type(loaded_obj)})")
+        except Exception as e:
+            print(f"❌ Erreur lors du chargement de {filename}: {e}")
+    else:
+        print(f"⚠️  Fichier non trouve: {path}")
+
+print(f"\n📦 Modeles disponibles: {list(MODELS_CACHE.keys())}")
+print("="*60 + "\n")
+
+# Fonction pour charger dynamiquement tous les modeles
 def load_all_models():
     loaded_models = {}
     if os.path.exists(MODELS_DIR):
         for file in os.listdir(MODELS_DIR):
-            if file.endswith(".pkl") and not file.startswith("feature_info"):
-                name = file.replace("_iris_model.pkl", "").replace(".pkl", "")
-                loaded_models[name] = joblib.load(os.path.join(MODELS_DIR, file))
+            # Ignorer feature_info et autres fichiers non-modeles
+            if file.endswith("_iris_model.pkl"):
+                name = file.replace("_iris_model.pkl", "")
+                try:
+                    path = os.path.join(MODELS_DIR, file)
+                    model = joblib.load(path)
+                    
+                    # Verification: c'est bien un modele
+                    if hasattr(model, 'predict'):
+                        loaded_models[name] = model
+                    else:
+                        print(f"⚠️  {file} ignore (pas un modele sklearn)")
+                        
+                except Exception as e:
+                    print(f"❌ Erreur chargement {file}: {e}")
     return loaded_models
 
-# 🔹 Charger info features (avec gestion d'erreur)
+# Charger info features (avec gestion d'erreur)
 FEATURE_NAMES = ["SepalLengthCm", "SepalWidthCm", "PetalLengthCm", "PetalWidthCm"]
 feature_info_path = os.path.join(MODELS_DIR, "feature_info.pkl")
 if os.path.exists(feature_info_path):
     try:
         feature_info = joblib.load(feature_info_path)
-        FEATURE_NAMES = feature_info.get("feature_names", FEATURE_NAMES)
-    except:
-        pass
+        if isinstance(feature_info, dict) and "feature_names" in feature_info:
+            FEATURE_NAMES = feature_info.get("feature_names", FEATURE_NAMES)
+            print(f"✅ Feature names charges: {FEATURE_NAMES}")
+    except Exception as e:
+        print(f"⚠️  Erreur chargement feature_info: {e}")
 
-# 🔹 Générer une analyse automatique
+# Generer une analyse automatique
 def generate_analysis(results, best_acc_model, best_f1_model, class_names=None):
     lines = []
-    # Meilleurs modèles
-    lines.append(f"🔹 Meilleur modèle par accuracy: {best_acc_model.upper()} ({results[best_acc_model]['accuracy']})")
-    lines.append(f"🔹 Meilleur modèle par F1-macro: {best_f1_model.upper()} ({results[best_f1_model]['f1_macro']})")
+    lines.append(f"🔹 Meilleur modele par accuracy: {best_acc_model.upper()} ({results[best_acc_model]['accuracy']})")
+    lines.append(f"🔹 Meilleur modele par F1-macro: {best_f1_model.upper()} ({results[best_f1_model]['f1_macro']})")
+    
     if best_acc_model == best_f1_model:
-        lines.append("✅ Ce modèle est aussi le plus robuste globalement.")
+        lines.append("✅ Ce modele est aussi le plus robuste globalement.")
     else:
-        lines.append("⚖️ Les deux mesures divergent, à considérer selon l'objectif (accuracy vs équilibre précision/rappel).")
+        lines.append("⚖️ Les deux mesures divergent, a considerer selon l'objectif.")
     
     # Analyse des erreurs par classe
     for model, metrics in results.items():
@@ -60,7 +96,7 @@ def generate_analysis(results, best_acc_model, best_f1_model, class_names=None):
         n_classes = cm.shape[0]
         total_errors = cm.sum() - cm.trace()
         if total_errors > 0:
-            lines.append(f"\n⚠️ {model.upper()} a {total_errors} erreurs au total:")
+            lines.append(f"\n⚠️  {model.upper()} a {total_errors} erreurs au total:")
             if class_names:
                 for i in range(n_classes):
                     for j in range(n_classes):
@@ -68,25 +104,52 @@ def generate_analysis(results, best_acc_model, best_f1_model, class_names=None):
                             lines.append(f"   - {class_names[i]} confondu avec {class_names[j]}: {cm[i,j]} fois")
     return "\n".join(lines)
 
-# 🔹 Prédiction simple
+# Route de debug
+@router.get("/debug")
+async def debug():
+    return JSONResponse({
+        "models_cache": {
+            name: {
+                "type": str(type(model).__name__),
+                "has_predict": hasattr(model, 'predict'),
+                "has_predict_proba": hasattr(model, 'predict_proba')
+            } for name, model in MODELS_CACHE.items()
+        },
+        "models_dir": MODELS_DIR,
+        "models_dir_exists": os.path.exists(MODELS_DIR),
+        "files_in_models_dir": os.listdir(MODELS_DIR) if os.path.exists(MODELS_DIR) else [],
+        "feature_names": FEATURE_NAMES,
+        "models_count": len(MODELS_CACHE)
+    })
+
+# Prediction simple
 @router.post("/predict")
 async def predict(request: dict = None):
     try:
         if not request:
             raise ValueError("Request body manquant")
+        
+        # Verifier que des modeles sont charges
+        if not MODELS_CACHE:
+            raise ValueError("Aucun modele disponible. Verifiez que les fichiers .pkl existent dans models/")
             
         mode = request.get("mode", "single")
 
         if mode == "single":
-            # Utiliser les noms de features définis
+            # Extraire les features
             data = np.array([[request.get(f, 0.0) for f in FEATURE_NAMES]])
             
-            # Utiliser le premier modèle disponible
-            if not MODELS_CACHE:
-                raise ValueError("Aucun modèle disponible")
-                
-            model_name = list(MODELS_CACHE.keys())[0]
+            # Utiliser le premier modele disponible ou celui specifie
+            model_name = request.get("model", list(MODELS_CACHE.keys())[0])
+            
+            if model_name not in MODELS_CACHE:
+                model_name = list(MODELS_CACHE.keys())[0]
+            
             model = MODELS_CACHE[model_name]
+            
+            # Verification finale
+            if not hasattr(model, 'predict'):
+                raise ValueError(f"Le modele {model_name} n'a pas de methode predict")
             
             prediction = model.predict(data)[0]
             proba = model.predict_proba(data).max() if hasattr(model, 'predict_proba') else 1.0
@@ -99,14 +162,14 @@ async def predict(request: dict = None):
             })
 
         elif mode == "compare":
-            # Charger tous les modèles disponibles
+            # Charger tous les modeles disponibles
             all_models = load_all_models()  
             
             if not all_models:
-                raise ValueError("Aucun modèle disponible pour la comparaison")
+                raise ValueError("Aucun modele disponible pour la comparaison")
                 
             if "X" not in request or "y" not in request:
-                raise ValueError("Les données 'X' et 'y' sont requises pour la comparaison")
+                raise ValueError("Les donnees 'X' et 'y' sont requises pour la comparaison")
                 
             X = np.array(request["X"])
             y_true = np.array(request["y"])
@@ -139,7 +202,7 @@ async def predict(request: dict = None):
                 if f1_macro > best_f1: 
                     best_f1, best_f1_model = f1_macro, name
 
-            # Générer analyse
+            # Generer analyse
             class_names = list(map(str, np.unique(y_true)))
             analysis = generate_analysis(results, best_acc_model, best_f1_model, class_names)
 
@@ -159,20 +222,25 @@ async def predict(request: dict = None):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-# 🔹 Comparaison via upload fichier JSON
+# Comparaison via upload fichier JSON
 @router.post("/compare_file")
 async def compare_file(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         data = json.loads(contents)
+        
         if "X" not in data or "y" not in data:
             raise ValueError("Le fichier JSON doit contenir 'X' et 'y'.")
+        
         data["mode"] = "compare"
         return await predict(data)
+        
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Fichier JSON invalide"}, status_code=400)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-# Liste des modèles
+# Liste des modeles
 METRICS_FILE = os.path.join(MODELS_DIR, "model_metrics.json")
 
 @router.get("/list_models")
@@ -189,25 +257,26 @@ async def list_models():
     # Lister les fichiers .pkl dans le dossier
     models_info = {}
     if os.path.exists(MODELS_DIR):
-        models_files = [f for f in os.listdir(MODELS_DIR) if f.endswith(".pkl") and not f.startswith("feature_info")]
+        models_files = [f for f in os.listdir(MODELS_DIR) 
+                       if f.endswith(".pkl") and not f.startswith("feature_info")]
         for model_file in models_files:
             model_name = model_file.replace("_iris_model.pkl", "").replace(".pkl", "")
             models_info[model_name] = metrics.get(model_name, {})
 
     return JSONResponse({"models": models_info})
 
-# Ajouter un modèle préentrainé
+# Ajouter un modele preentrainee
 @router.post("/add_model")
 async def add_model(file: UploadFile = File(...), accuracy: float = None, f1_macro: float = None):
     if not file.filename.endswith(".pkl"):
-        return JSONResponse({"error": "Le fichier doit être un .pkl"}, status_code=400)
+        return JSONResponse({"error": "Le fichier doit etre un .pkl"}, status_code=400)
 
     # Sauvegarder le fichier dans models/
     model_path = os.path.join(MODELS_DIR, file.filename)
     with open(model_path, "wb") as f:
         f.write(await file.read())
 
-    # Mettre à jour le fichier metrics
+    # Mettre a jour le fichier metrics
     metrics = {}
     if os.path.exists(METRICS_FILE):
         try:
@@ -222,12 +291,12 @@ async def add_model(file: UploadFile = File(...), accuracy: float = None, f1_mac
     with open(METRICS_FILE, "w") as f:
         json.dump(metrics, f, indent=4)
 
-    return JSONResponse({"message": f"Modèle {model_name} ajouté avec succès !"})
+    return JSONResponse({"message": f"Modele {model_name} ajoute avec succes !"})
 
-# Supprimer un modèle
+# Supprimer un modele
 @router.delete("/delete_model")
 async def delete_model(model_name: str = Query(...)):
-    # Essayer différents formats de noms de fichiers
+    # Essayer differents formats de noms de fichiers
     possible_files = [
         f"{model_name}.pkl",
         f"{model_name}_iris_model.pkl"
@@ -241,11 +310,11 @@ async def delete_model(model_name: str = Query(...)):
             break
 
     if not model_file:
-        return JSONResponse({"error": "Modèle non trouvé"}, status_code=404)
+        return JSONResponse({"error": "Modele non trouve"}, status_code=404)
 
     os.remove(model_file)
 
-    # Mettre à jour le fichier metrics
+    # Mettre a jour le fichier metrics
     if os.path.exists(METRICS_FILE):
         try:
             with open(METRICS_FILE, "r") as f:
@@ -257,4 +326,4 @@ async def delete_model(model_name: str = Query(...)):
         except:
             pass
 
-    return JSONResponse({"message": f"Modèle {model_name} supprimé avec succès !"})
+    return JSONResponse({"message": f"Modele {model_name} supprime avec succes !"})
