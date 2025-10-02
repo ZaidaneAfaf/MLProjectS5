@@ -27,8 +27,8 @@ pipeline {
     APP_NAME     = 'iris-ml-app'
     DOCKER_IMAGE = "${APP_NAME}"
 
-    // Port (Streamlit)
-    APP_PORT     = '8501'                 // <-- IMPORTANT : Streamlit écoute 8501
+    // Port (Streamlit écoute 8501)
+    APP_PORT     = '8501'
 
     // Azure (tes ressources)
     AZ_LOCATION  = 'germanywestcentral'
@@ -68,6 +68,7 @@ pipeline {
 
           echo.
           echo "=== Project Files ==="
+          if exist "jenkins\\train.py" (echo OK: jenkins\\train.py) else (echo NO: jenkins\\train.py & exit /b 1)
           if exist "app.py" (echo OK: app.py) else (echo NO: app.py & exit /b 1)
           if exist "requirements.txt" (echo OK: requirements.txt) else (echo NO: requirements.txt & exit /b 1)
           if exist "Dockerfile" (echo OK: Dockerfile) else (echo NO: Dockerfile & exit /b 1)
@@ -88,8 +89,11 @@ pipeline {
         bat '''
           if not exist "artifacts" mkdir artifacts
 
-          docker run --rm -v "%CD%":/app -w /app python:3.11-slim sh -lc ^
-            "pip install -q scikit-learn pandas numpy joblib && python jenkins/train.py"
+          docker run --rm ^
+            -v "%CD%":/app ^
+            -v "%CD%\\artifacts":/app/data ^
+            -w /app python:3.11-slim sh -lc ^
+              "pip install -q scikit-learn pandas numpy joblib && TEST_DATA_DIR=/app/data python jenkins/train.py"
           IF ERRORLEVEL 1 exit /b 1
 
           if exist artifacts\\iris_model.pkl (echo "✅ artifacts\\iris_model.pkl created") else (echo "❌ Model file missing" & exit /b 1)
@@ -182,7 +186,6 @@ pipeline {
       steps {
         script {
           if (params.DEPLOY_METHOD == 'acr-admin') {
-            // Utilise un credential Jenkins ID "acr-admin" (username/password ACR)
             withCredentials([usernamePassword(credentialsId: 'acr-admin', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
               bat '''
                 az webapp config container set -g %AZ_RG% -n %AZ_WEBAPP% ^
