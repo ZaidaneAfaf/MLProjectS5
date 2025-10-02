@@ -165,7 +165,27 @@ for idx, (name, model) in enumerate(models.items()):
     print(f"✅ {name} Accuracy: {accuracy:.3f}")
     
     # 📊 Écriture dans TensorBoard
-    # Métriques scalaires
+    # 📝 Affichage texte formaté
+    text_summary = f"""
+🔍 **{name.upper()}**:
+
+📊 **RÉSUMÉ RESSOURCES - {name.upper()}**
+
+⏱️  **Durée monitoring:** {stats['duration']:.0f} secondes
+
+💻 **CPU moyen:** {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)
+
+🧠 **Mémoire moyenne:** {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)
+
+💾 **Mémoire utilisée:** {stats['mem_gb']:.1f} GB
+
+✅ **Accuracy:** {accuracy:.3f}
+
+---
+"""
+    writer.add_text(f'{name}/resume', text_summary, 0)
+    
+    # Métriques scalaires (pour les graphes si besoin)
     writer.add_scalar(f'{name}/accuracy', accuracy, 0)
     writer.add_scalar(f'{name}/cpu_mean', stats['cpu_mean'], 0)
     writer.add_scalar(f'{name}/cpu_max', stats['cpu_max'], 0)
@@ -173,15 +193,6 @@ for idx, (name, model) in enumerate(models.items()):
     writer.add_scalar(f'{name}/memory_max', stats['mem_max'], 0)
     writer.add_scalar(f'{name}/memory_gb', stats['mem_gb'], 0)
     writer.add_scalar(f'{name}/duration', stats['duration'], 0)
-    
-    # Courbes CPU/RAM au fil du temps
-    for i, (cpu, mem) in enumerate(zip(stats['cpu_values'], stats['mem_values'])):
-        writer.add_scalar(f'{name}/cpu_usage', cpu, i)
-        writer.add_scalar(f'{name}/memory_usage', mem, i)
-    
-    # Histogrammes
-    writer.add_histogram(f'{name}/cpu_distribution', pd.Series(stats['cpu_values']), 0)
-    writer.add_histogram(f'{name}/memory_distribution', pd.Series(stats['mem_values']), 0)
     
     # Test rapide
     test_data_sample = X_test.iloc[0:1]
@@ -197,6 +208,38 @@ for idx, (name, model) in enumerate(models.items()):
     print(f"💾 Modèle sauvegardé: {os.path.join(MODELS_DIR, f'{name}_iris_model.pkl')}")
 
 # 📊 Comparaison globale dans TensorBoard
+# Texte de résumé global
+global_summary = """
+# 💻 CONSOMMATION CPU/RAM PAR MODÈLE
+====================================================================
+
+"""
+
+for name in models.keys():
+    stats = resources_stats[name]
+    acc = results[name]
+    global_summary += f"""
+## 🔍 {name.upper()}:
+
+📊 **RÉSUMÉ RESSOURCES - {name.upper()}**
+
+⏱️  **Durée monitoring:** {stats['duration']:.0f} secondes
+
+💻 **CPU moyen:** {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)
+
+🧠 **Mémoire moyenne:** {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)
+
+💾 **Mémoire utilisée:** {stats['mem_gb']:.1f} GB
+
+✅ **Accuracy:** {acc:.3f}
+
+---
+
+"""
+
+writer.add_text('RESUME_GLOBAL/tous_les_modeles', global_summary, 0)
+
+# Scalaires de comparaison (optionnel)
 for name in models.keys():
     writer.add_scalars('comparison/cpu_mean', {name: resources_stats[name]['cpu_mean']}, 0)
     writer.add_scalars('comparison/memory_mean', {name: resources_stats[name]['mem_mean']}, 0)
