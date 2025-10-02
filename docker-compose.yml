@@ -42,7 +42,7 @@ services:
       dockerfile: Dockerfile.tensorboard
     image: iris-tensorboard:latest
     ports:
-      - "6007:6006"
+      - "600:6006"
     volumes:
       - ./artifacts/tensorboard:/tensorboard_logs
     command: tensorboard --logdir=/tensorboard_logs --host=0.0.0.0 --port=6006 --reload_interval=5
