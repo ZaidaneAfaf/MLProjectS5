@@ -1,18 +1,22 @@
 FROM python:3.9-slim
 
-# Installer TensorBoard et dépendances
+# Installer TensorBoard et les dépendances nécessaires
 RUN pip install --no-cache-dir \
     tensorboard==2.15.1 \
-    protobuf==3.20.3
+    protobuf==3.20.3 \
+    pandas \
+    scikit-learn \
+    joblib \
+    psutil \
+    torch
 
 # Créer le répertoire des logs
 RUN mkdir -p /tensorboard_logs
 
+WORKDIR /app
+
 # Exposer le port TensorBoard
 EXPOSE 6006
 
-# Point d'entrée par défaut
-ENTRYPOINT ["tensorboard"]
-
-# Arguments par défaut (peuvent être overridés dans docker-compose)
-CMD ["--logdir=/tensorboard_logs", "--host=0.0.0.0", "--port=6006"]
+# Commande par défaut
+CMD ["tensorboard", "--logdir=/tensorboard_logs", "--host=0.0.0.0", "--port=6006", "--reload_interval=5"]

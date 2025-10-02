@@ -21,7 +21,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 🔹 Chemins absolus pour les données et modèles
 DATA_PATH = os.path.join(BASE_DIR, "..", "data", "Iris.csv")
 MODELS_DIR = os.path.join(BASE_DIR, "..", "models")
-LOGS_DIR = os.path.join(BASE_DIR, "..", "logs", "tensorboard")
+LOGS_DIR = os.path.join(BASE_DIR, "..", "artifacts", "tensorboard")
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 

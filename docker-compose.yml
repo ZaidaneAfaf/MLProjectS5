@@ -17,7 +17,7 @@ services:
     networks:
       iris-network:
         aliases:
-          - backend  # AJOUTEZ CETTE LIGNE
+          - backend
 
   client:
     build:
@@ -32,15 +32,12 @@ services:
       - serveur
     environment:
       - PYTHONUNBUFFERED=1
-      - API_URL=http://backend:8000  # Maintenant "backend" fonctionnera
+      - API_URL=http://backend:8000
     networks:
       - iris-network
 
   tensorboard:
-    build:
-      context: .
-      dockerfile: Dockerfile.tensorboard
-    image: iris-tensorboard:latest
+    image: tensorflow/tensorflow:2.13.0
     ports:
       - "6006:6006"
     volumes:
