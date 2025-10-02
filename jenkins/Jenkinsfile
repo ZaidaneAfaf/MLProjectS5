@@ -5,7 +5,6 @@ pipeline {
         DOCKER_IMAGE = 'iris-train'
         CONTAINER_NAME = 'iris-container'
         DOCKER_IMAGE_TAG = "${DOCKER_IMAGE}:${BUILD_NUMBER}"
-        // Configuration pour l'encodage Windows
         PYTHONIOENCODING = 'utf-8'
         PYTHONLEGACYWINDOWSSTDIO = '1'
     }
@@ -43,44 +42,51 @@ pipeline {
                 bat '''
                     echo Creating artifacts directory...
                     if not exist "artifacts" mkdir artifacts
+                    if not exist "logs\\tensorboard" mkdir logs\\tensorboard
                     
                     echo Installing Python dependencies...
-                    pip install scikit-learn pandas numpy joblib || echo Some packages may already be installed
+                    pip install scikit-learn pandas numpy joblib psutil tensorboard torch torchvision || echo Some packages may already be installed
                     
                     echo Running training script locally...
                     cd jenkins
                     set PYTHONIOENCODING=utf-8
                     python train.py
                     
-                    echo Moving trained model to artifacts...
-                    if exist "iris_model.pkl" (
-                        move iris_model.pkl "../artifacts/iris_model.pkl"
-                        echo Model moved to artifacts successfully
+                    echo Moving trained models to artifacts...
+                    cd ..
+                    if exist "models\\*.pkl" (
+                        xcopy /Y /I models\\*.pkl artifacts\\
+                        echo Models moved to artifacts successfully
                     ) else (
-                        echo No new model generated, using existing model if available
+                        echo ERROR: No models generated
+                        exit /b 1
                     )
                     
-                    cd ..
                     echo Checking artifacts directory...
                     dir artifacts
                     
-                    if exist "artifacts\\iris_model.pkl" (
-                        echo SUCCESS: Model available for deployment
-                    ) else (
-                        echo ERROR: No model available for deployment
-                        exit /b 1
-                    )
+                    echo.
+                    echo ==========================================
+                    echo 📊 TENSORBOARD LOGS DISPONIBLES
+                    echo ==========================================
+                    echo Logs sauvegardés dans: logs\\tensorboard
+                    dir logs\\tensorboard
+                    echo.
+                    echo Pour visualiser:
+                    echo tensorboard --logdir=logs/tensorboard --port=6006
+                    echo Puis ouvrir: http://localhost:6006
+                    echo ==========================================
                 '''
             }
         }
         
         stage('Copy Model to Server') {
             steps {
-                echo 'Copying model to server directory...'
+                echo 'Copying models to server directory...'
                 bat '''
                     if not exist "serveur\\models" mkdir serveur\\models
-                    copy artifacts\\iris_model.pkl serveur\\models\\iris_model.pkl
-                    echo Model copied successfully
+                    xcopy /Y artifacts\\*.pkl serveur\\models\\
+                    echo Models copied successfully
                     dir serveur\\models
                 '''
             }
@@ -94,6 +100,7 @@ pipeline {
                     taskkill /F /IM python.exe 2>nul || echo No Python processes to kill
                     taskkill /F /IM uvicorn.exe 2>nul || echo No uvicorn processes to kill  
                     taskkill /F /IM streamlit.exe 2>nul || echo No streamlit processes to kill
+                    taskkill /F /IM tensorboard.exe 2>nul || echo No tensorboard processes to kill
                     
                     echo Stopping Docker containers...
                     docker-compose down --remove-orphans 2>nul || echo No containers to stop
@@ -153,12 +160,32 @@ pipeline {
             }
         }
         
+        stage('Start TensorBoard') {
+            steps {
+                echo 'Starting TensorBoard server...'
+                bat '''
+                    echo Launching TensorBoard in background...
+                    start /B /MIN cmd /c "tensorboard --logdir=logs/tensorboard --port=6006 --host=0.0.0.0"
+                    
+                    timeout /t 5 /nobreak >nul 2>&1 || ping -n 5 127.0.0.1 >nul
+                    
+                    echo.
+                    echo ==========================================
+                    echo 📊 TENSORBOARD LANCÉ
+                    echo ==========================================
+                    echo URL: http://localhost:6006
+                    echo ==========================================
+                '''
+            }
+        }
+        
         stage('Verify Deployment') {
             steps {
                 echo 'Verifying deployment...'
                 script {
                     def apiWorking = false
                     def streamlitWorking = false
+                    def tensorboardWorking = false
                     
                     try {
                         bat 'curl -f http://localhost:8000 --connect-timeout 5 --max-time 10'
@@ -174,6 +201,14 @@ pipeline {
                         echo "✅ Streamlit is responding"
                     } catch (Exception e) {
                         echo "⚠️ Streamlit not responding"
+                    }
+                    
+                    try {
+                        bat 'curl -f http://localhost:6006 --connect-timeout 5 --max-time 10'
+                        tensorboardWorking = true
+                        echo "✅ TensorBoard is responding"
+                    } catch (Exception e) {
+                        echo "⚠️ TensorBoard not responding"
                     }
                     
                     if (apiWorking || streamlitWorking) {
@@ -192,6 +227,7 @@ pipeline {
         always {
             echo 'Archiving artifacts...'
             archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'logs/tensorboard/**/*', allowEmptyArchive: true
             
             bat '''
                 echo.
@@ -201,13 +237,15 @@ pipeline {
                 docker ps | findstr iris || echo No Docker containers running
                 echo.
                 echo Port status:
-                netstat -an | findstr :8000 && echo "Port 8000: IN USE" || echo "Port 8000: FREE"
-                netstat -an | findstr :8501 && echo "Port 8501: IN USE" || echo "Port 8501: FREE"
+                netstat -an | findstr :8000 && echo "Port 8000 (API): IN USE" || echo "Port 8000 (API): FREE"
+                netstat -an | findstr :8501 && echo "Port 8501 (Streamlit): IN USE" || echo "Port 8501 (Streamlit): FREE"
+                netstat -an | findstr :6006 && echo "Port 6006 (TensorBoard): IN USE" || echo "Port 6006 (TensorBoard): FREE"
                 echo.
                 echo Your application should be available at:
                 echo  - Streamlit UI: http://localhost:8501
                 echo  - FastAPI: http://localhost:8000
                 echo  - API Docs: http://localhost:8000/docs
+                echo  - TensorBoard: http://localhost:6006
                 echo ===============================
             '''
         }
@@ -227,6 +265,13 @@ pipeline {
                 echo  - Main App: http://localhost:8501  
                 echo  - API: http://localhost:8000
                 echo  - Docs: http://localhost:8000/docs
+                echo  - TensorBoard: http://localhost:6006
+                echo.
+                echo 📊 TensorBoard Features:
+                echo  - CPU/RAM usage par modèle
+                echo  - Courbes de consommation
+                echo  - Comparaison des performances
+                echo  - Histogrammes de ressources
                 echo.
                 echo 🧪 Test prediction:
                 echo curl -X POST "http://localhost:8000/predict" ^
@@ -251,6 +296,7 @@ pipeline {
                 echo Please check manually:
                 echo  - http://localhost:8501
                 echo  - http://localhost:8000
+                echo  - http://localhost:6006
                 echo =========================================
             '''
         }
