@@ -1,33 +1,35 @@
+# ========= Iris ML API - Image d'exécution =========
 FROM python:3.11-slim
 
-# Métadonnées
-LABEL maintainer="ZaidaneAfaf"
-LABEL description="Iris ML Training Container"
-
-# Variables d'environnement
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-
-# Crée le dossier de travail
 WORKDIR /app
 
-# Crée le dossier artifacts
-RUN mkdir -p artifacts
+# Copie du code et du modèle attendu par routes.py (../models/iris_model.pkl)
+COPY serveur ./serveur
+COPY models  ./models   
+# (Tu peux aussi copier artifacts/ si tu en as besoin pour autre chose)
+# COPY artifacts ./artifacts
 
-# Copie d'abord requirements.txt depuis le bon répertoire
-COPY jenkins/requirements.txt .
+# Dépendances + curl pour le HEALTHCHECK
+RUN pip install --no-cache-dir \
+      fastapi \
+      uvicorn[standard] \
+      scikit-learn \
+      pandas \
+      numpy \
+      pydantic \
+      joblib \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
 
-# Installe les dépendances
-RUN pip install --no-cache-dir -r requirements.txt
+# (optionnel, utile pour les imports)
+ENV PYTHONUNBUFFERED=1
+# ENV PYTHONPATH=/app
 
-# Copie le dataset depuis le bon répertoire
-COPY data/Iris.csv ./Iris.csv
+EXPOSE 80
 
-# Copie le script d'entraînement depuis le bon répertoire
-COPY jenkins/train.py .
+# Si ton app fournit bien /health (voir snippet plus bas), garde ceci :
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fs http://localhost:80/health || exit 1
 
-# Permissions pour le script Python
-RUN chmod +x train.py
-
-# Commande par défaut pour lancer le training
-CMD ["python", "train.py"]
+CMD ["uvicorn", "serveur.app:app", "--host", "0.0.0.0", "--port", "80"]

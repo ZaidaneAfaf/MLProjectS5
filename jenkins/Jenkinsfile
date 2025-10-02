@@ -1,273 +1,286 @@
 pipeline {
-    agent any
-    
-    environment {
-        DOCKER_IMAGE = 'iris-train'
-        CONTAINER_NAME = 'iris-container'
-        DOCKER_IMAGE_TAG = "${DOCKER_IMAGE}:${BUILD_NUMBER}"
-        // Configuration pour l'encodage Windows
-        PYTHONIOENCODING = 'utf-8'
-        PYTHONLEGACYWINDOWSSTDIO = '1'
+  agent any
+
+  options {
+    skipDefaultCheckout(true)
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '20'))
+    timeout(time: 45, unit: 'MINUTES')
+  }
+  triggers { githubPush() }
+
+  /*************** PARAMÈTRES MODULAIRES ***************/
+  parameters {
+    choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Environnement cible (informative)')
+    string(name: 'IMAGE_TAG', defaultValue: '', description: 'Tag image (vide = BUILD_NUMBER)')
+    booleanParam(name: 'PUSH_LATEST', defaultValue: true, description: 'Pousser aussi :latest')
+    choice(name: 'DEPLOY_METHOD', choices: ['acr-admin', 'managed-identity'], description: 'Méthode de pull ACR par le Web App')
+    booleanParam(name: 'SKIP_TRAIN', defaultValue: false, description: "Sauter l’entrainement si artifacts/iris_model.pkl déjà présent")
+    booleanParam(name: 'RUN_SMOKE_AFTER_DEPLOY', defaultValue: false, description: 'Tester / après déploiement (peut échouer le build)')
+    booleanParam(name: 'FAIL_ON_SMOKE', defaultValue: false, description: 'Si vrai et RUN_SMOKE_AFTER_DEPLOY=true, échoue en cas d’erreur')
+  }
+
+  /*************** VARIABLES D’ENVIRONNEMENT ***************/
+  environment {
+    // Application / Image
+    APP_NAME     = 'iris-ml-app'
+    DOCKER_IMAGE = "${APP_NAME}"
+
+    // Port (Streamlit)
+    APP_PORT     = '8501'                 // <-- IMPORTANT : Streamlit écoute 8501
+
+    // Azure (tes ressources)
+    AZ_LOCATION  = 'germanywestcentral'
+    AZ_RG        = 'ml_rg'
+    AZ_PLAN      = 'plan-jenkins'
+    AZ_WEBAPP    = 'app-jenkis-ml'
+
+    // ACR
+    AZ_ACR_NAME  = 'mlregitery123'
+    AZ_ACR_LOGIN = 'mlregitery123.azurecr.io'
+
+    // Tags calculés
+    CALC_TAG     = "${params.IMAGE_TAG ?: BUILD_NUMBER}"
+    IMG_LOCAL    = "${DOCKER_IMAGE}:${CALC_TAG}"
+    IMG_LOCAL_L  = "${DOCKER_IMAGE}:latest"
+    IMG_ACR      = "${AZ_ACR_LOGIN}/${DOCKER_IMAGE}:${CALC_TAG}"
+    IMG_ACR_L    = "${AZ_ACR_LOGIN}/${DOCKER_IMAGE}:latest"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        milestone(1)
+        echo '📦 Checkout repository...'
+        checkout scm
+      }
     }
-    
-    stages {
-        stage('Checkout') {
-            steps {
-                echo 'Cloning repository...'
-                checkout scm
-            }
-        }
-        
-        stage('Verify Environment') {
-            steps {
-                echo 'Checking environment...'
-                bat '''
-                    echo Current directory: %CD%
-                    dir
-                    echo.
-                    echo Python version:
-                    python --version || echo Python not found in PATH
-                    echo.
-                    echo Docker version:
-                    docker --version
-                    echo.
-                    echo Docker Compose version:
-                    docker-compose --version || docker compose version
-                '''
-            }
-        }
-        
-        stage('Local Python Training') {
-            steps {
-                echo 'Training model with local Python...'
-                bat '''
-                    echo Creating artifacts directory...
-                    if not exist "artifacts" mkdir artifacts
-                    
-                    echo Installing Python dependencies...
-                    pip install scikit-learn pandas numpy joblib || echo Some packages may already be installed
-                    
-                    echo Running training script locally...
-                    cd jenkins
-                    set PYTHONIOENCODING=utf-8
-                    python train.py
-                    
-                    echo Moving trained model to artifacts...
-                    if exist "iris_model.pkl" (
-                        move iris_model.pkl "../artifacts/iris_model.pkl"
-                        echo Model moved to artifacts successfully
-                    ) else (
-                        echo No new model generated, using existing model if available
-                    )
-                    
-                    cd ..
-                    echo Checking artifacts directory...
-                    dir artifacts
-                    
-                    if exist "artifacts\\iris_model.pkl" (
-                        echo SUCCESS: Model available for deployment
-                    ) else (
-                        echo ERROR: No model available for deployment
-                        exit /b 1
-                    )
-                '''
-            }
-        }
-        
-        stage('Copy Model to Server') {
-            steps {
-                echo 'Copying model to server directory...'
-                bat '''
-                    if not exist "serveur\\models" mkdir serveur\\models
-                    copy artifacts\\iris_model.pkl serveur\\models\\iris_model.pkl
-                    echo Model copied successfully
-                    dir serveur\\models
-                '''
-            }
-        }
-        
-        stage('Stop Previous Services') {
-            steps {
-                echo 'Stopping previous services...'
-                bat '''
-                    echo Killing Python processes...
-                    taskkill /F /IM python.exe 2>nul || echo No Python processes to kill
-                    taskkill /F /IM uvicorn.exe 2>nul || echo No uvicorn processes to kill  
-                    taskkill /F /IM streamlit.exe 2>nul || echo No streamlit processes to kill
-                    
-                    echo Stopping Docker containers...
-                    docker-compose down --remove-orphans 2>nul || echo No containers to stop
-                    docker stop iris-serveur iris-client 2>nul || echo No manual containers to stop
-                    docker rm iris-serveur iris-client 2>nul || echo No manual containers to remove
-                    
-                    echo Waiting for ports to be freed...
-                    timeout /t 5 /nobreak >nul 2>&1 || ping -n 5 127.0.0.1 >nul
-                '''
-            }
-        }
-        
-        stage('Deploy Application') {
-            steps {
-                echo 'Deploying application...'
-                bat '''
-                    echo Starting Docker Compose deployment...
-                    docker-compose up -d --build && (
-                        echo Docker Compose deployment successful!
-                        timeout /t 15 /nobreak >nul 2>&1 || ping -n 15 127.0.0.1 >nul
-                        
-                        echo Checking container status...
-                        docker-compose ps
-                        
-                        echo Testing services...
-                        curl -f http://localhost:8000 --connect-timeout 10 && (
-                            echo API: RESPONDING
-                        ) || (
-                            echo API: NOT READY YET
-                        )
-                        
-                        curl -f http://localhost:8501 --connect-timeout 10 && (
-                            echo STREAMLIT: RESPONDING  
-                        ) || (
-                            echo STREAMLIT: NOT READY YET
-                        )
-                        
-                        echo Docker deployment completed
-                        
-                    ) || (
-                        echo Docker Compose failed, using Python fallback...
-                        
-                        cd serveur
-                        pip install fastapi uvicorn joblib numpy scikit-learn pandas pydantic 2>nul || echo FastAPI deps installed
-                        start /B /MIN cmd /c "python -m uvicorn app:app --host 0.0.0.0 --port 8000"
-                        
-                        cd ..\\client
-                        pip install streamlit requests pandas numpy 2>nul || echo Streamlit deps installed
-                        start /B /MIN cmd /c "streamlit run app.py --server.port 8501 --server.address 0.0.0.0"
-                        
-                        cd ..
-                        timeout /t 20 /nobreak >nul 2>&1 || ping -n 20 127.0.0.1 >nul
-                        
-                        echo Python fallback completed
-                    )
-                '''
-            }
-        }
-        
-        stage('Verify Deployment') {
-            steps {
-                echo 'Verifying deployment...'
-                script {
-                    def apiWorking = false
-                    def streamlitWorking = false
-                    
-                    try {
-                        bat 'curl -f http://localhost:8000 --connect-timeout 5 --max-time 10'
-                        apiWorking = true
-                        echo "✅ API is responding"
-                    } catch (Exception e) {
-                        echo "⚠️ API not responding"
-                    }
-                    
-                    try {
-                        bat 'curl -f http://localhost:8501 --connect-timeout 5 --max-time 10'
-                        streamlitWorking = true
-                        echo "✅ Streamlit is responding"
-                    } catch (Exception e) {
-                        echo "⚠️ Streamlit not responding"
-                    }
-                    
-                    if (apiWorking || streamlitWorking) {
-                        echo "🎉 Deployment successful - at least one service is running!"
-                        currentBuild.result = 'SUCCESS'
-                    } else {
-                        echo "⚠️ Services may still be starting up..."
-                        currentBuild.result = 'UNSTABLE'
-                    }
-                }
-            }
-        }
+
+    stage('Verify Environment & Project') {
+      steps {
+        echo '🔍 Checking tools & project files...'
+        bat '''
+          echo "=== Tools ==="
+          git --version
+          docker --version
+          az --version
+
+          echo.
+          echo "=== Project Files ==="
+          if exist "app.py" (echo OK: app.py) else (echo NO: app.py & exit /b 1)
+          if exist "requirements.txt" (echo OK: requirements.txt) else (echo NO: requirements.txt & exit /b 1)
+          if exist "Dockerfile" (echo OK: Dockerfile) else (echo NO: Dockerfile & exit /b 1)
+
+          echo.
+          echo "=== Data / Model presence (pre-train) ==="
+          if exist "data\\Iris.csv" (echo OK: data\\Iris.csv) else (echo WARN: data\\Iris.csv missing - fallback sklearn)
+          if exist "artifacts\\iris_model.pkl" (echo FOUND: artifacts\\iris_model.pkl) else (echo NOT YET: artifacts\\iris_model.pkl)
+          if exist "models\\iris_model.pkl" (echo FOUND: models\\iris_model.pkl) else (echo NOT YET: models\\iris_model.pkl)
+        '''
+      }
     }
-    
-    post {
-        always {
-            echo 'Archiving artifacts...'
-            archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
-            
-            bat '''
-                echo.
-                echo ===== DEPLOYMENT STATUS =====
-                echo.
-                echo Docker containers:
-                docker ps | findstr iris || echo No Docker containers running
-                echo.
-                echo Port status:
-                netstat -an | findstr :8000 && echo "Port 8000: IN USE" || echo "Port 8000: FREE"
-                netstat -an | findstr :8501 && echo "Port 8501: IN USE" || echo "Port 8501: FREE"
-                echo.
-                echo Your application should be available at:
-                echo  - Streamlit UI: http://localhost:8501
-                echo  - FastAPI: http://localhost:8000
-                echo  - API Docs: http://localhost:8000/docs
-                echo ===============================
-            '''
-        }
-        
-        success {
-            echo '🎉 Pipeline completed successfully!'
-            
-            bat '''
-                echo.
-                echo =========================================
-                echo        DEPLOYMENT SUCCESS!
-                echo =========================================
-                echo.
-                echo Your Iris ML Application is ready!
-                echo.
-                echo 🌐 Access URLs:
-                echo  - Main App: http://localhost:8501  
-                echo  - API: http://localhost:8000
-                echo  - Docs: http://localhost:8000/docs
-                echo.
-                echo 🧪 Test prediction:
-                echo curl -X POST "http://localhost:8000/predict" ^
-                echo      -H "Content-Type: application/json" ^
-                echo      -d "{\\"SepalLengthCm\\": 5.1, \\"SepalWidthCm\\": 3.5, \\"PetalLengthCm\\": 1.4, \\"PetalWidthCm\\": 0.2}"
-                echo.
-                echo 🛑 To stop: docker-compose down
-                echo =========================================
-            '''
-        }
-        
-        unstable {
-            echo '⚠️ Pipeline completed with warnings'
-            
-            bat '''
-                echo.
-                echo =========================================
-                echo    DEPLOYMENT COMPLETED WITH WARNINGS
-                echo =========================================
-                echo.
-                echo Services may still be starting up.
-                echo Please check manually:
-                echo  - http://localhost:8501
-                echo  - http://localhost:8000
-                echo =========================================
-            '''
-        }
-        
-        failure {
-            echo '❌ Pipeline failed'
-            
-            bat '''
-                echo.
-                echo =========================================
-                echo         PIPELINE FAILURE
-                echo =========================================
-                echo.
-                echo Check the logs above for errors.
-                echo Verify Docker and Python are working.
-                echo =========================================
-            '''
-        }
+
+    stage('Train Model') {
+      when { expression { return !params.SKIP_TRAIN } }
+      steps {
+        echo '🤖 Training ML model (inside Docker python:3.11-slim)...'
+        bat '''
+          if not exist "artifacts" mkdir artifacts
+
+          docker run --rm -v "%CD%":/app -w /app python:3.11-slim sh -lc ^
+            "pip install -q scikit-learn pandas numpy joblib && python jenkins/train.py"
+          IF ERRORLEVEL 1 exit /b 1
+
+          if exist artifacts\\iris_model.pkl (echo "✅ artifacts\\iris_model.pkl created") else (echo "❌ Model file missing" & exit /b 1)
+        '''
+      }
     }
+
+    stage('Prepare Model for Image') {
+      steps {
+        echo '📁 Ensuring models/iris_model.pkl exists for image build...'
+        bat '''
+          if not exist "models" mkdir models
+          if exist artifacts\\iris_model.pkl copy /Y artifacts\\iris_model.pkl models\\iris_model.pkl >NUL
+          if exist models\\iris_model.pkl (echo OK: models\\iris_model.pkl) else (echo ❌ Missing models\\iris_model.pkl & exit /b 1)
+        '''
+      }
+    }
+
+    stage('Build Image') {
+      steps {
+        milestone(2)
+        echo "🐳 Building image ${IMG_LOCAL}..."
+        bat '''
+          docker build --pull -t %IMG_LOCAL% .
+          IF ERRORLEVEL 1 exit /b 1
+          docker tag %IMG_LOCAL% %IMG_LOCAL_L%
+          docker images | findstr /I "%APP_NAME%"
+        '''
+      }
+    }
+
+    stage('Azure Login + Ensure Resources') {
+      steps {
+        echo '🔐 Azure login (Service Principal) & ensure RG/ACR/Plan/WebApp...'
+        withCredentials([
+          string(credentialsId: 'az-client-id',       variable: 'AZ_CLIENT_ID'),
+          string(credentialsId: 'az-client-secret',   variable: 'AZ_CLIENT_SECRET'),
+          string(credentialsId: 'az-tenant-id',       variable: 'AZ_TENANT_ID'),
+          string(credentialsId: 'az-subscription-id', variable: 'AZ_SUBSCRIPTION_ID')
+        ]) {
+          bat '''
+            az login --service-principal -u %AZ_CLIENT_ID% -p %AZ_CLIENT_SECRET% --tenant %AZ_TENANT_ID%
+            IF ERRORLEVEL 1 exit /b 1
+            az account set --subscription %AZ_SUBSCRIPTION_ID%
+            IF ERRORLEVEL 1 exit /b 1
+
+            az provider register -n Microsoft.ContainerRegistry
+            az provider register -n Microsoft.Web
+
+            az group show -n %AZ_RG% || az group create -n %AZ_RG% -l %AZ_LOCATION%
+            IF ERRORLEVEL 1 exit /b 1
+
+            az acr show -n %AZ_ACR_NAME% || az acr create -n %AZ_ACR_NAME% -g %AZ_RG% --sku Basic --admin-enabled true
+            IF ERRORLEVEL 1 exit /b 1
+
+            az appservice plan show -g %AZ_RG% -n %AZ_PLAN% || az appservice plan create -g %AZ_RG% -n %AZ_PLAN% --is-linux --sku B1 -l %AZ_LOCATION%
+            IF ERRORLEVEL 1 exit /b 1
+
+            az webapp show -g %AZ_RG% -n %AZ_WEBAPP% || az webapp create -g %AZ_RG% -n %AZ_WEBAPP% -p %AZ_PLAN%
+            IF ERRORLEVEL 1 exit /b 1
+          '''
+        }
+      }
+    }
+
+    stage('Push to ACR') {
+      steps {
+        echo '⬆️ Push image to ACR...'
+        bat '''
+          az acr login --name %AZ_ACR_NAME%
+          IF ERRORLEVEL 1 exit /b 1
+
+          docker tag %IMG_LOCAL% %IMG_ACR%
+          docker push %IMG_ACR%
+          IF ERRORLEVEL 1 exit /b 1
+
+          IF "%PUSH_LATEST%"=="true" (
+            docker tag %IMG_LOCAL_L% %IMG_ACR_L%
+            docker push %IMG_ACR_L%
+            IF ERRORLEVEL 1 exit /b 1
+          )
+
+          rem --- Check rapide des tags dans l'ACR (non bloquant)
+          az acr repository show-tags -n %AZ_ACR_NAME% --repository %APP_NAME% -o table
+        '''
+      }
+    }
+
+    stage('Deploy to Web App') {
+      steps {
+        script {
+          if (params.DEPLOY_METHOD == 'acr-admin') {
+            // Utilise un credential Jenkins ID "acr-admin" (username/password ACR)
+            withCredentials([usernamePassword(credentialsId: 'acr-admin', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
+              bat '''
+                az webapp config container set -g %AZ_RG% -n %AZ_WEBAPP% ^
+                  --container-image-name %IMG_ACR% ^
+                  --container-registry-url https://%AZ_ACR_LOGIN% ^
+                  --container-registry-user %ACR_USERNAME% ^
+                  --container-registry-password %ACR_PASSWORD%
+                IF ERRORLEVEL 1 exit /b 1
+
+                rem *** Streamlit écoute 8501 => aligne WEBSITES_PORT ***
+                az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=%APP_PORT%
+                az webapp restart -g %AZ_RG% -n %AZ_WEBAPP%
+
+                rem --- Récupère & nettoie le FQDN
+                az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query defaultHostName -o tsv > webapp_fqdn.txt
+                for /f "usebackq tokens=* delims=" %%i in ("webapp_fqdn.txt") do set FQDN=%%i
+                echo %FQDN%>webapp_fqdn.txt
+              '''
+            }
+          } else { // managed-identity (recommandé)
+            withCredentials([string(credentialsId: 'az-subscription-id', variable: 'AZ_SUBSCRIPTION_ID')]) {
+              bat '''
+                az webapp identity assign -g %AZ_RG% -n %AZ_WEBAPP%
+                IF ERRORLEVEL 1 exit /b 1
+
+                set PRINCIPAL=
+                for /f "tokens=*" %%i in ('az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query identity.principalId -o tsv') do set PRINCIPAL=%%i
+
+                az role assignment create --assignee %PRINCIPAL% --role "AcrPull" --scope /subscriptions/%AZ_SUBSCRIPTION_ID%/resourceGroups/%AZ_RG%/providers/Microsoft.ContainerRegistry/registries/%AZ_ACR_NAME%
+                IF ERRORLEVEL 1 exit /b 1
+
+                az webapp config container set -g %AZ_RG% -n %AZ_WEBAPP% ^
+                  --container-image-name %IMG_ACR% ^
+                  --container-registry-url https://%AZ_ACR_LOGIN%
+                IF ERRORLEVEL 1 exit /b 1
+
+                rem *** Streamlit écoute 8501 => aligne WEBSITES_PORT ***
+                az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=%APP_PORT%
+                az webapp restart -g %AZ_RG% -n %AZ_WEBAPP%
+
+                rem --- Récupère & nettoie le FQDN
+                az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query defaultHostName -o tsv > webapp_fqdn.txt
+                for /f "usebackq tokens=* delims=" %%i in ("webapp_fqdn.txt") do set FQDN=%%i
+                echo %FQDN%>webapp_fqdn.txt
+              '''
+            }
+          }
+        }
+      }
+    }
+
+    stage('Smoke Test on Azure (optional)') {
+      when { expression { return params.RUN_SMOKE_AFTER_DEPLOY } }
+      steps {
+        echo '🩺 Azure smoke test (/) — optionnel'
+        bat '''
+          if not exist webapp_fqdn.txt (echo "No FQDN file" & exit /b 0)
+          set /p FQDN=<webapp_fqdn.txt
+          for /f "tokens=* delims= " %%a in ("%FQDN%") do set FQDN=%%a
+          echo Testing http://%FQDN%/
+
+          powershell -NoProfile -Command "Start-Sleep -Seconds 25"
+
+          rem GET /
+          powershell -NoProfile -Command ^
+            "$ErrorActionPreference='SilentlyContinue';" ^
+            "try{$r=Invoke-WebRequest http://%FQDN%/ -UseBasicParsing; if($r.StatusCode -lt 200 -or $r.StatusCode -ge 400){exit 2}}catch{exit 2}"
+          if ERRORLEVEL 2 (
+            echo "WARN: GET / failed on Azure"
+            IF "%FAIL_ON_SMOKE%"=="true" exit /b 1
+          )
+
+          echo "✅ Azure smoke test passed (non-blocking)"
+        '''
+      }
+    }
+  }
+
+  post {
+    always {
+      echo '📦 Archiving artifacts...'
+      archiveArtifacts artifacts: 'artifacts/**, deploy.txt, webapp_fqdn.txt', allowEmptyArchive: true
+    }
+    success {
+      echo '🎉 SUCCESS'
+      powershell '''
+        if (Test-Path "webapp_fqdn.txt") {
+          $fqdn = (Get-Content "webapp_fqdn.txt" | Select-Object -First 1).Trim()
+          Write-Host "Open:  http://$fqdn/"
+          Write-Host "Port:  (WEBSITES_PORT=$env:APP_PORT)"
+        } else {
+          Write-Host "FQDN not found (open Azure portal)."
+        }
+        exit 0
+      '''
+    }
+    failure {
+      echo '❌ PIPELINE FAILED - check logs'
+    }
+  }
 }
