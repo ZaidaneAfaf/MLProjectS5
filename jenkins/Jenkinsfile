@@ -16,8 +16,8 @@ pipeline {
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Tag image (vide = BUILD_NUMBER)')
     booleanParam(name: 'PUSH_LATEST', defaultValue: true, description: 'Pousser aussi :latest')
     choice(name: 'DEPLOY_METHOD', choices: ['acr-admin', 'managed-identity'], description: 'Méthode de pull ACR par le Web App')
-    booleanParam(name: 'SKIP_TRAIN', defaultValue: false, description: 'Sauter l’entrainement si artifacts/iris_model.pkl déjà présent')
-    booleanParam(name: 'RUN_SMOKE_AFTER_DEPLOY', defaultValue: false, description: 'Tester / et /predict après déploiement (peut échouer le build)')
+    booleanParam(name: 'SKIP_TRAIN', defaultValue: false, description: "Sauter l’entrainement si artifacts/iris_model.pkl déjà présent")
+    booleanParam(name: 'RUN_SMOKE_AFTER_DEPLOY', defaultValue: false, description: 'Tester / après déploiement (peut échouer le build)')
     booleanParam(name: 'FAIL_ON_SMOKE', defaultValue: false, description: 'Si vrai et RUN_SMOKE_AFTER_DEPLOY=true, échoue en cas d’erreur')
   }
 
@@ -27,7 +27,10 @@ pipeline {
     APP_NAME     = 'iris-ml-app'
     DOCKER_IMAGE = "${APP_NAME}"
 
-    // Azure (fixés sur tes ressources existantes)
+    // Port (Streamlit)
+    APP_PORT     = '8501'                 // <-- IMPORTANT : Streamlit écoute 8501
+
+    // Azure (tes ressources)
     AZ_LOCATION  = 'germanywestcentral'
     AZ_RG        = 'ml_rg'
     AZ_PLAN      = 'plan-jenkins'
@@ -65,9 +68,8 @@ pipeline {
 
           echo.
           echo "=== Project Files ==="
-          if exist "jenkins\\train.py" (echo OK: jenkins\\train.py) else (echo NO: jenkins\\train.py & exit /b 1)
-          if exist "serveur\\app.py" (echo OK: serveur\\app.py) else (echo NO: serveur\\app.py & exit /b 1)
-          if exist "serveur\\routes.py" (echo OK: serveur\\routes.py) else (echo NO: serveur\\routes.py & exit /b 1)
+          if exist "app.py" (echo OK: app.py) else (echo NO: app.py & exit /b 1)
+          if exist "requirements.txt" (echo OK: requirements.txt) else (echo NO: requirements.txt & exit /b 1)
           if exist "Dockerfile" (echo OK: Dockerfile) else (echo NO: Dockerfile & exit /b 1)
 
           echo.
@@ -146,7 +148,7 @@ pipeline {
             az appservice plan show -g %AZ_RG% -n %AZ_PLAN% || az appservice plan create -g %AZ_RG% -n %AZ_PLAN% --is-linux --sku B1 -l %AZ_LOCATION%
             IF ERRORLEVEL 1 exit /b 1
 
-            az webapp show -g %AZ_RG% -n %AZ_WEBAPP% || az webapp create -g %AZ_RG% -n %AZ_WEBAPP% -p %AZ_PLAN% --runtime "PYTHON:3.11"
+            az webapp show -g %AZ_RG% -n %AZ_WEBAPP% || az webapp create -g %AZ_RG% -n %AZ_WEBAPP% -p %AZ_PLAN%
             IF ERRORLEVEL 1 exit /b 1
           '''
         }
@@ -190,7 +192,8 @@ pipeline {
                   --container-registry-password %ACR_PASSWORD%
                 IF ERRORLEVEL 1 exit /b 1
 
-                az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=80
+                rem *** Streamlit écoute 8501 => aligne WEBSITES_PORT ***
+                az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=%APP_PORT%
                 az webapp restart -g %AZ_RG% -n %AZ_WEBAPP%
 
                 rem --- Récupère & nettoie le FQDN
@@ -216,7 +219,8 @@ pipeline {
                   --container-registry-url https://%AZ_ACR_LOGIN%
                 IF ERRORLEVEL 1 exit /b 1
 
-                az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=80
+                rem *** Streamlit écoute 8501 => aligne WEBSITES_PORT ***
+                az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=%APP_PORT%
                 az webapp restart -g %AZ_RG% -n %AZ_WEBAPP%
 
                 rem --- Récupère & nettoie le FQDN
@@ -233,31 +237,21 @@ pipeline {
     stage('Smoke Test on Azure (optional)') {
       when { expression { return params.RUN_SMOKE_AFTER_DEPLOY } }
       steps {
-        echo '🩺 Azure smoke test (/, /predict) — optionnel'
+        echo '🩺 Azure smoke test (/) — optionnel'
         bat '''
           if not exist webapp_fqdn.txt (echo "No FQDN file" & exit /b 0)
           set /p FQDN=<webapp_fqdn.txt
           for /f "tokens=* delims= " %%a in ("%FQDN%") do set FQDN=%%a
           echo Testing http://%FQDN%/
 
-          powershell -NoProfile -Command "Start-Sleep -Seconds 15"
+          powershell -NoProfile -Command "Start-Sleep -Seconds 25"
 
           rem GET /
           powershell -NoProfile -Command ^
             "$ErrorActionPreference='SilentlyContinue';" ^
-            "try{$r=Invoke-WebRequest http://%FQDN%/ -UseBasicParsing; if($r.StatusCode -ne 200){exit 2}}catch{exit 2}"
+            "try{$r=Invoke-WebRequest http://%FQDN%/ -UseBasicParsing; if($r.StatusCode -lt 200 -or $r.StatusCode -ge 400){exit 2}}catch{exit 2}"
           if ERRORLEVEL 2 (
             echo "WARN: GET / failed on Azure"
-            IF "%FAIL_ON_SMOKE%"=="true" exit /b 1
-          )
-
-          rem POST /predict
-          powershell -NoProfile -Command ^
-            "$body=@{SepalLengthCm=5.1;SepalWidthCm=3.5;PetalLengthCm=1.4;PetalWidthCm=0.2}|ConvertTo-Json;" ^
-            "$ErrorActionPreference='SilentlyContinue';" ^
-            "try{$r=Invoke-WebRequest http://%FQDN%/predict -UseBasicParsing -ContentType 'application/json' -Method POST -Body $body; if($r.StatusCode -ne 200){exit 3}}catch{exit 3}"
-          if ERRORLEVEL 3 (
-            echo "WARN: POST /predict failed on Azure"
             IF "%FAIL_ON_SMOKE%"=="true" exit /b 1
           )
 
@@ -277,9 +271,8 @@ pipeline {
       powershell '''
         if (Test-Path "webapp_fqdn.txt") {
           $fqdn = (Get-Content "webapp_fqdn.txt" | Select-Object -First 1).Trim()
-          Write-Host "Open:   http://$fqdn/"
-          Write-Host "Root:   http://$fqdn/"
-          Write-Host "Predict (POST): http://$fqdn/predict"
+          Write-Host "Open:  http://$fqdn/"
+          Write-Host "Port:  (WEBSITES_PORT=$env:APP_PORT)"
         } else {
           Write-Host "FQDN not found (open Azure portal)."
         }
