@@ -10,7 +10,6 @@ pipeline {
   }
   triggers { githubPush() }
 
-  /*************** PARAMÈTRES MODULAIRES ***************/
   parameters {
     choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Environnement cible (info)')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Tag image (vide = BUILD_NUMBER)')
@@ -21,31 +20,22 @@ pipeline {
     booleanParam(name: 'FAIL_ON_SMOKE', defaultValue: false, description: 'Échouer si Smoke Test KO')
   }
 
-  /*************** VARIABLES D’ENVIRONNEMENT ***************/
   environment {
-    // Application / Image
     APP_NAME     = 'iris-ml-app'
     DOCKER_IMAGE = "${APP_NAME}"
 
-    // Choisis le port de l’app (80 = Uvicorn/FastAPI, 8501 = Streamlit)
+    // FastAPI (80). Si Streamlit: mets 8501 et adapte STARTUP_CMD
     APP_PORT     = '80'
-
-    // Commande de démarrage dans le container (Azure Web App -> Startup Command)
-    // Pour Streamlit, remplace par :
-    // STARTUP_CMD = 'python -m streamlit run app.py --server.port=8501 --server.address=0.0.0.0'
     STARTUP_CMD  = "python -m uvicorn serveur.app:app --host 0.0.0.0 --port ${APP_PORT}"
 
-    // Azure
     AZ_LOCATION  = 'germanywestcentral'
     AZ_RG        = 'ml_rg'
     AZ_PLAN      = 'plan-jenkins'
     AZ_WEBAPP    = 'app-jenkis-ml'
 
-    // ACR
     AZ_ACR_NAME  = 'mlregitery123'
     AZ_ACR_LOGIN = 'mlregitery123.azurecr.io'
 
-    // Tags calculés
     CALC_TAG     = "${params.IMAGE_TAG ?: BUILD_NUMBER}"
     IMG_LOCAL    = "${DOCKER_IMAGE}:${CALC_TAG}"
     IMG_LOCAL_L  = "${DOCKER_IMAGE}:latest"
@@ -75,13 +65,8 @@ pipeline {
           echo "=== Project Files ==="
           if exist "jenkins\\train.py" (echo OK: jenkins\\train.py) else (echo NO: jenkins\\train.py & exit /b 1)
           if exist "Dockerfile" (echo OK: Dockerfile) else (echo NO: Dockerfile & exit /b 1)
-
-          rem On accepte FastAPI (serveur\\app.py) ou Streamlit (app.py)
           if exist "serveur\\app.py" (echo OK: serveur\\app.py) else (echo WARN: serveur\\app.py absent)
           if exist "app.py" (echo OK: app.py) else (echo WARN: app.py absent)
-
-          echo.
-          echo "=== Data / Model presence (pre-train) ==="
           if exist "data\\Iris.csv" (echo OK: data\\Iris.csv) else (echo WARN: data\\Iris.csv manquant)
           if exist "artifacts\\iris_model.pkl" (echo FOUND: artifacts\\iris_model.pkl) else (echo NOT YET: artifacts\\iris_model.pkl)
         '''
@@ -95,13 +80,12 @@ pipeline {
         bat '''
           if not exist "artifacts" mkdir artifacts
 
-          rem IMPORTANT : NE **PAS** MONTER artifacts sur /app/data !
-          rem On monte le workspace sur /app et artifacts sur /app/artifacts
+          rem Workspace -> /app ; artifacts -> /app/artifacts (écriture autorisée)
           docker run --rm ^
             -v "%CD%":/app ^
             -v "%CD%\\artifacts":/app/artifacts ^
             -w /app python:3.11-slim sh -lc ^
-              "pip install -q scikit-learn pandas numpy joblib && python jenkins/train.py"
+              "pip install -q scikit-learn pandas numpy joblib && TEST_DATA_DIR=/app/artifacts python jenkins/train.py"
           IF ERRORLEVEL 1 exit /b 1
 
           if exist artifacts\\iris_model.pkl (echo "✅ artifacts\\iris_model.pkl created") else (echo "❌ Model file missing" & exit /b 1)
@@ -135,7 +119,7 @@ pipeline {
 
     stage('Azure Login + Ensure Resources') {
       steps {
-        echo '🔐 Azure login (Service Principal) & ensure RG/Plan/WebApp...'
+        echo '🔐 Azure login (SP) & ensure RG/Plan/WebApp...'
         withCredentials([
           string(credentialsId: 'az-client-id',       variable: 'AZ_CLIENT_ID'),
           string(credentialsId: 'az-client-secret',   variable: 'AZ_CLIENT_SECRET'),
@@ -157,7 +141,6 @@ pipeline {
             az appservice plan show -g %AZ_RG% -n %AZ_PLAN% || az appservice plan create -g %AZ_RG% -n %AZ_PLAN% --is-linux --sku B1 -l %AZ_LOCATION%
             IF ERRORLEVEL 1 exit /b 1
 
-            rem Crée le Web App s'il n'existe pas (puis on passera en mode container après)
             az webapp show -g %AZ_RG% -n %AZ_WEBAPP% || az webapp create -g %AZ_RG% -n %AZ_WEBAPP% -p %AZ_PLAN% --runtime "PYTHON:3.11"
             IF ERRORLEVEL 1 exit /b 1
           '''
@@ -182,7 +165,6 @@ pipeline {
             IF ERRORLEVEL 1 exit /b 1
           )
 
-          rem --- Check rapide des tags dans l'ACR (non bloquant)
           az acr repository show-tags -n %AZ_ACR_NAME% --repository %APP_NAME% -o table
         '''
       }
@@ -192,7 +174,6 @@ pipeline {
       steps {
         script {
           if (params.DEPLOY_METHOD == 'acr-admin') {
-            // Utilise un credential Jenkins ID "acr-admin" (username/password ACR)
             withCredentials([usernamePassword(credentialsId: 'acr-admin', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
               bat '''
                 az webapp config container set -g %AZ_RG% -n %AZ_WEBAPP% ^
@@ -205,40 +186,33 @@ pipeline {
                 az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=%APP_PORT% WEBSITES_CONTAINER_START_TIME_LIMIT=1800
                 az webapp config set -g %AZ_RG% -n %AZ_WEBAPP% --startup-file "%STARTUP_CMD%"
                 az webapp restart -g %AZ_RG% -n %AZ_WEBAPP%
-
                 az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query defaultHostName -o tsv > webapp_fqdn.txt
                 for /f "usebackq tokens=* delims=" %%i in ("webapp_fqdn.txt") do set FQDN=%%i
                 echo %FQDN%>webapp_fqdn.txt
               '''
             }
-          } else { // managed-identity (recommandé)
+          } else {
             withCredentials([string(credentialsId: 'az-subscription-id', variable: 'AZ_SUBSCRIPTION_ID')]) {
               bat '''
-                rem Assigner l’identité système
                 az webapp identity assign -g %AZ_RG% -n %AZ_WEBAPP%
                 IF ERRORLEVEL 1 exit /b 1
 
-                rem Donner AcrPull au Web App sur l’ACR
                 for /f "tokens=*" %%i in ('az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query identity.principalId -o tsv') do set PRINCIPAL=%%i
                 az role assignment create --assignee %PRINCIPAL% --role "AcrPull" --scope /subscriptions/%AZ_SUBSCRIPTION_ID%/resourceGroups/%AZ_RG%/providers/Microsoft.ContainerRegistry/registries/%AZ_ACR_NAME%
                 IF ERRORLEVEL 1 exit /b 1
 
-                rem Utiliser l’identité pour tirer l’image privée
                 az webapp config set -g %AZ_RG% -n %AZ_WEBAPP% --acr-use-identity true --acr-identity [system]
                 IF ERRORLEVEL 1 exit /b 1
 
-                rem Configurer l’image container (sans user/pass)
                 az webapp config container set -g %AZ_RG% -n %AZ_WEBAPP% ^
                   --container-image-name %IMG_ACR% ^
                   --container-registry-url https://%AZ_ACR_LOGIN%
                 IF ERRORLEVEL 1 exit /b 1
 
-                rem Paramètres d’exécution et Startup Command
                 az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=%APP_PORT% WEBSITES_CONTAINER_START_TIME_LIMIT=1800
                 az webapp config set -g %AZ_RG% -n %AZ_WEBAPP% --startup-file "%STARTUP_CMD%"
                 az webapp restart -g %AZ_RG% -n %AZ_WEBAPP%
 
-                rem Récupérer le FQDN
                 az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query defaultHostName -o tsv > webapp_fqdn.txt
                 for /f "usebackq tokens=* delims=" %%i in ("webapp_fqdn.txt") do set FQDN=%%i
                 echo %FQDN%>webapp_fqdn.txt
@@ -261,7 +235,6 @@ pipeline {
 
           powershell -NoProfile -Command "Start-Sleep -Seconds 20"
 
-          rem GET /
           powershell -NoProfile -Command ^
             "$ErrorActionPreference='SilentlyContinue';" ^
             "try{$r=Invoke-WebRequest http://%FQDN%/ -UseBasicParsing; if($r.StatusCode -lt 200 -or $r.StatusCode -ge 400){exit 2}}catch{exit 2}"
