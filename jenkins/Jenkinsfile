@@ -32,26 +32,28 @@ pipeline {
     AZ_ACR_LOGIN = 'mlregitery123.azurecr.io'
 
     // Backend (FastAPI)
-    BACK_APP_NAME   = 'iris-ml-app'
-    BACK_WEBAPP     = 'app-jenkis-ml'
-    BACK_APP_PORT   = '80'
-    BACK_IMG_LOCAL  = "${BACK_APP_NAME}:${params.IMAGE_TAG ?: BUILD_NUMBER}"
-    BACK_IMG_LOCAL_L= "${BACK_APP_NAME}:latest"
-    BACK_IMG_ACR    = "${AZ_ACR_LOGIN}/${BACK_APP_NAME}:${params.IMAGE_TAG ?: BUILD_NUMBER}"
-    BACK_IMG_ACR_L  = "${AZ_ACR_LOGIN}/${BACK_APP_NAME}:latest"
-    BACK_STARTUP    = "python -m uvicorn serveur.app:app --host 0.0.0.0 --port ${BACK_APP_PORT}"
+    BACK_APP_NAME    = 'iris-ml-app'
+    BACK_WEBAPP      = 'app-jenkis-ml'
+    BACK_APP_PORT    = '80'
+    BACK_IMG_TAG     = "${params.IMAGE_TAG ?: BUILD_NUMBER}"
+    BACK_IMG_LOCAL   = "${BACK_APP_NAME}:${BACK_IMG_TAG}"
+    BACK_IMG_LOCAL_L = "${BACK_APP_NAME}:latest"
+    BACK_IMG_ACR     = "${AZ_ACR_LOGIN}/${BACK_APP_NAME}:${BACK_IMG_TAG}"
+    BACK_IMG_ACR_L   = "${AZ_ACR_LOGIN}/${BACK_APP_NAME}:latest"
+    BACK_STARTUP     = "python -m uvicorn serveur.app:app --host 0.0.0.0 --port ${BACK_APP_PORT}"
 
     // Front (Streamlit)
-    FRONT_APP_NAME   = 'iris-ml-front'
-    FRONT_WEBAPP     = 'app-jenkis-ml-front'
-    FRONT_APP_PORT   = '8501'
-    FRONT_IMG_LOCAL  = "${FRONT_APP_NAME}:${params.IMAGE_TAG ?: BUILD_NUMBER}"
-    FRONT_IMG_LOCAL_L= "${FRONT_APP_NAME}:latest"
-    FRONT_IMG_ACR    = "${AZ_ACR_LOGIN}/${FRONT_APP_NAME}:${params.IMAGE_TAG ?: BUILD_NUMBER}"
-    FRONT_IMG_ACR_L  = "${AZ_ACR_LOGIN}/${FRONT_APP_NAME}:latest"
+    FRONT_APP_NAME    = 'iris-ml-front'
+    FRONT_WEBAPP      = 'app-jenkis-ml-front'
+    FRONT_APP_PORT    = '8501'
+    FRONT_IMG_TAG     = "${params.IMAGE_TAG ?: BUILD_NUMBER}"
+    FRONT_IMG_LOCAL   = "${FRONT_APP_NAME}:${FRONT_IMG_TAG}"
+    FRONT_IMG_LOCAL_L = "${FRONT_APP_NAME}:latest"
+    FRONT_IMG_ACR     = "${AZ_ACR_LOGIN}/${FRONT_APP_NAME}:${FRONT_IMG_TAG}"
+    FRONT_IMG_ACR_L   = "${AZ_ACR_LOGIN}/${FRONT_APP_NAME}:latest"
 
     // URL backend (utilisé par le front)
-    BACKEND_URL      = "https://${BACK_WEBAPP}.azurewebsites.net"
+    BACKEND_URL = "https://${BACK_WEBAPP}.azurewebsites.net"
   }
 
   stages {
@@ -108,7 +110,6 @@ pipeline {
             -w /app python:3.11-slim sh -lc ^
               "set -e; \
                mkdir -p /app/data /app/models; \
-               [ -f /app/data/Iris.csv ] || cp -f /app/data/Iris.csv /dev/null 2>/dev/null || true; \
                pip install -q scikit-learn pandas numpy joblib && \
                python jenkins/train.py"
 
@@ -127,7 +128,7 @@ pipeline {
           if not exist "models" mkdir models
           if exist artifacts\\models\\iris_model.pkl copy /Y artifacts\\models\\iris_model.pkl models\\iris_model.pkl >NUL
           if exist artifacts\\iris_model.pkl copy /Y artifacts\\iris_model.pkl models\\iris_model.pkl >NUL
-          if exist models\\iris_model.pkl (echo OK: models\\iris_model.pkl) else (echo ⚠️ Missing models\\iris_model.pkl & echo "continue (backend peut démarrer sans)" )
+          if exist models\\iris_model.pkl (echo OK: models\\iris_model.pkl) else (echo WARN: Missing models\\iris_model.pkl ^& echo "continue (backend peut démarrer sans)")
         '''
       }
     }
@@ -179,7 +180,7 @@ pipeline {
             az appservice plan show -g %AZ_RG% -n %AZ_PLAN% || az appservice plan create -g %AZ_RG% -n %AZ_PLAN% --is-linux --sku B1 -l %AZ_LOCATION%
             IF ERRORLEVEL 1 exit /b 1
 
-            az webapp show -g %AZ_RG% -n %BACK_WEBAPP% || az webapp create -g %AZ_RG% -n %BACK_WEBAPP% -p %AZ_PLAN%
+            az webapp show -g %AZ_RG% -n %BACK_WEBAPP%  || az webapp create -g %AZ_RG% -n %BACK_WEBAPP%  -p %AZ_PLAN%
             az webapp show -g %AZ_RG% -n %FRONT_WEBAPP% || az webapp create -g %AZ_RG% -n %FRONT_WEBAPP% -p %AZ_PLAN%
           '''
         }
@@ -248,7 +249,8 @@ pipeline {
               bat '''
                 az webapp identity assign -g %AZ_RG% -n %BACK_WEBAPP%
                 for /f "tokens=*" %%i in ('az webapp show -g %AZ_RG% -n %BACK_WEBAPP% --query identity.principalId -o tsv') do set PRINCIPAL=%%i
-                az role assignment create --assignee %PRINCIPAL% --role "AcrPull" --scope /subscriptions/%AZ_SUBSCRIPTION_ID%/resourceGroups/%AZ_RG%/providers/Microsoft.ContainerRegistry/registries/%AZ_ACR_NAME%
+                rem Rendre idempotent : ne pas échouer si l’assignation existe déjà
+                az role assignment create --assignee %PRINCIPAL% --role "AcrPull" --scope /subscriptions/%AZ_SUBSCRIPTION_ID%/resourceGroups/%AZ_RG%/providers/Microsoft.ContainerRegistry/registries/%AZ_ACR_NAME% || echo "AcrPull peut déjà exister"
 
                 az webapp config set -g %AZ_RG% -n %BACK_WEBAPP% --acr-use-identity true --acr-identity [system]
                 az webapp config container set -g %AZ_RG% -n %BACK_WEBAPP% ^
@@ -297,7 +299,8 @@ pipeline {
               bat '''
                 az webapp identity assign -g %AZ_RG% -n %FRONT_WEBAPP%
                 for /f "tokens=*" %%i in ('az webapp show -g %AZ_RG% -n %FRONT_WEBAPP% --query identity.principalId -o tsv') do set PRINCIPAL=%%i
-                az role assignment create --assignee %PRINCIPAL% --role "AcrPull" --scope /subscriptions/%AZ_SUBSCRIPTION_ID%/resourceGroups/%AZ_RG%/providers/Microsoft.ContainerRegistry/registries/%AZ_ACR_NAME%
+                rem Idempotent
+                az role assignment create --assignee %PRINCIPAL% --role "AcrPull" --scope /subscriptions/%AZ_SUBSCRIPTION_ID%/resourceGroups/%AZ_RG%/providers/Microsoft.ContainerRegistry/registries/%AZ_ACR_NAME% || echo "AcrPull peut déjà exister"
 
                 az webapp config set -g %AZ_RG% -n %FRONT_WEBAPP% --acr-use-identity true --acr-identity [system]
                 az webapp config container set -g %AZ_RG% -n %FRONT_WEBAPP% ^
@@ -332,19 +335,25 @@ pipeline {
           rem ---- BACKEND
           if exist back_fqdn.txt (
             set /p BFQDN=<back_fqdn.txt
+            echo Backend FQDN: %BFQDN%
             powershell -NoProfile -Command "Start-Sleep -Seconds 15"
             powershell -NoProfile -Command ^
               "$ErrorActionPreference='SilentlyContinue'; try{$r=Invoke-WebRequest http://%BFQDN%/ -UseBasicParsing; if($r.StatusCode -lt 200 -or $r.StatusCode -ge 400){exit 2}}catch{exit 2}"
             if ERRORLEVEL 2 ( echo "WARN: backend / KO" & set FAIL=1 ) else ( echo "OK: backend /" )
+          ) else (
+            echo "No back_fqdn.txt (skip)"
           )
 
           rem ---- FRONT
           if exist front_fqdn.txt (
             set /p FFQDN=<front_fqdn.txt
+            echo Front FQDN: %FFQDN%
             powershell -NoProfile -Command "Start-Sleep -Seconds 15"
             powershell -NoProfile -Command ^
               "$ErrorActionPreference='SilentlyContinue'; try{$r=Invoke-WebRequest http://%FFQDN%/ -UseBasicParsing; if($r.StatusCode -lt 200 -or $r.StatusCode -ge 400){exit 3}}catch{exit 3}"
             if ERRORLEVEL 3 ( echo "WARN: front / KO" & set FAIL=1 ) else ( echo "OK: front /" )
+          ) else (
+            echo "No front_fqdn.txt (skip)"
           )
 
           if %FAIL%==1 (
@@ -365,9 +374,13 @@ pipeline {
     }
     success {
       echo '🎉 SUCCESS'
+      // PowerShell 5.1 compatible (pas d’opérateur ternaire)
       powershell '''
-        $back = (Test-Path "back_fqdn.txt")  ? ((Get-Content "back_fqdn.txt" | Select-Object -First 1).Trim())   : ""
-        $front= (Test-Path "front_fqdn.txt") ? ((Get-Content "front_fqdn.txt"| Select-Object -First 1).Trim())    : ""
+        $back  = ""
+        if (Test-Path "back_fqdn.txt")  { $back  = (Get-Content "back_fqdn.txt"  | Select-Object -First 1).Trim() }
+        $front = ""
+        if (Test-Path "front_fqdn.txt") { $front = (Get-Content "front_fqdn.txt" | Select-Object -First 1).Trim() }
+
         if ($back)  { Write-Host ("Backend:  http://{0}/   (docs: http://{0}/docs)" -f $back) }
         if ($front) { Write-Host ("Front:    http://{0}/" -f $front) }
         exit 0
