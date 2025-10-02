@@ -1,33 +1,28 @@
-version: '3.8'
+version: "3.8"
 
 services:
   backend:
-    build: 
+    build:
       context: ./serveur
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile        # écoute 80 dans le conteneur
     ports:
-      - "8000:8000"
-    volumes:
-      - ./serveur:/app
-      - ./models:/app/models
+      - "8000:80"                   # host:container
     environment:
-      - PYTHONPATH=/app
-    networks:
-      - app-network
+      - PYTHONUNBUFFERED=1
+    networks: [app]
 
   frontend:
     build:
       context: ./client
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile        # écoute 8501 dans le conteneur
     ports:
-      - "8502:8501"
-    volumes:
-      - ./client:/app
+      - "8502:8501"                 # http://localhost:8502
+    environment:
+      - API_URL=http://backend:80   # appel API via le réseau Docker
     depends_on:
       - backend
-    networks:
-      - app-network
+    networks: [app]
 
 networks:
-  app-network:
+  app:
     driver: bridge

@@ -1,34 +1,23 @@
 FROM python:3.11-slim
 
-# Métadonnées
-LABEL maintainer="ZaidaneAfaf"
-LABEL description="Iris ML API Server"
-
-# Variables d'environnement
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-
-# Crée le dossier de travail
 WORKDIR /app
 
-# Copie requirements.txt en premier pour optimiser le cache Docker
-COPY requirements.txt .
+# Copie le code et les modèles
+COPY serveur ./serveur
+COPY models  ./models
 
-# Installe les dépendances
-RUN pip install --no-cache-dir -r requirements.txt
+# Dépendances
+RUN pip install --no-cache-dir \
+      fastapi uvicorn[standard] scikit-learn pandas numpy pydantic joblib \
+ && apt-get update && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
 
-# Crée le dossier models
-RUN mkdir -p models
+ENV PYTHONUNBUFFERED=1
 
-# Copie le code de l'application
-COPY . .
+EXPOSE 80
 
-# Expose le port
-EXPOSE 8000
+# Healthcheck (assure-toi d’avoir /health dans FastAPI)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fs http://localhost:80/health || exit 1
 
-# Commande de santé pour vérifier que l'API fonctionne
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Commande par défaut
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "serveur.app:app", "--host", "0.0.0.0", "--port", "80"]
