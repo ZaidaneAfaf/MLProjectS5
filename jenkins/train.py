@@ -1,3 +1,4 @@
+# train.py
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC
@@ -169,25 +170,30 @@ for idx, (name, model) in enumerate(models.items()):
     results[name] = accuracy
     print(f"✅ {name} Accuracy: {accuracy:.3f}")
     
-    # 📊 Écriture dans TensorBoard - VERSION ULTRA-SIMPLE
-    # Texte très simple sans accents
-    model_text = f"Model: {name}"
-    model_text += f" | Accuracy: {accuracy:.3f}"
-    model_text += f" | CPU: {stats['cpu_mean']:.1f}%"
-    model_text += f" | RAM: {stats['mem_mean']:.1f}%"
-    model_text += f" | Memory: {stats['mem_gb']:.1f}GB"
-    model_text += f" | Time: {stats['duration']:.0f}s"
+    # 📊 CORRECTION: Écriture dans TensorBoard avec step différent pour chaque modèle
+    # Résumé texte pour chaque modèle
+    text_summary = f"""
+# 🔹 {name.upper()}
+
+**Accuracy:** {accuracy:.3f}  
+**CPU moyen:** {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)  
+**RAM moyenne:** {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)  
+**Mémoire utilisée:** {stats['mem_gb']:.3f} GB  
+**Durée:** {stats['duration']:.1f}s
+
+---
+"""
+    # IMPORTANT: Utiliser des steps différents (idx) pour chaque modèle
+    writer.add_text(f'Performances_Modeles/{name.upper()}', text_summary, idx)
     
-    writer.add_text(f'models/{name}', model_text, 0)
-    
-    # Métriques scalaires
-    writer.add_scalar(f'accuracy/{name}', accuracy, 0)
-    writer.add_scalar(f'cpu/mean/{name}', stats['cpu_mean'], 0)
-    writer.add_scalar(f'cpu/max/{name}', stats['cpu_max'], 0)
-    writer.add_scalar(f'memory/mean/{name}', stats['mem_mean'], 0)
-    writer.add_scalar(f'memory/max/{name}', stats['mem_max'], 0)
-    writer.add_scalar(f'memory/gb/{name}', stats['mem_gb'], 0)
-    writer.add_scalar(f'duration/{name}', stats['duration'], 0)
+    # Métriques scalaires avec steps
+    writer.add_scalar(f'Accuracy/{name}', accuracy, idx)
+    writer.add_scalar(f'CPU_Moyen/{name}', stats['cpu_mean'], idx)
+    writer.add_scalar(f'CPU_Max/{name}', stats['cpu_max'], idx)
+    writer.add_scalar(f'RAM_Moyenne/{name}', stats['mem_mean'], idx)
+    writer.add_scalar(f'RAM_Max/{name}', stats['mem_max'], idx)
+    writer.add_scalar(f'Memoire_GB/{name}', stats['mem_gb'], idx)
+    writer.add_scalar(f'Duree_secondes/{name}', stats['duration'], idx)
     
     # Test rapide
     test_data_sample = X_test.iloc[0:1]
@@ -202,52 +208,68 @@ for idx, (name, model) in enumerate(models.items()):
     joblib.dump(model, os.path.join(MODELS_DIR, f"{name}_iris_model.pkl"))
     print(f"💾 Modèle sauvegardé: {os.path.join(MODELS_DIR, f'{name}_iris_model.pkl')}")
 
-# 📊 RÉSUMÉ GLOBAL dans TensorBoard - SANS ACCENTS
-summary_text = "IRIS MODELS PERFORMANCE COMPARISON"
-summary_text += "\n=================================="
-summary_text += "\nModel        | Accuracy | CPU   | RAM   | Memory | Time"
-summary_text += "\n-------------|----------|-------|-------|--------|------"
+# 📊 RÉSUMÉ GLOBAL dans TensorBoard
+print("\n📝 Création du résumé global pour TensorBoard...")
+
+global_summary = """
+# 📊 RÉSUMÉ FINAL DES PERFORMANCES
+
+======================================================================
+
+"""
 
 for name in models.keys():
     stats = resources_stats[name]
     acc = results[name]
-    summary_text += f"\n{name:12} | {acc:.3f}    | {stats['cpu_mean']:.1f}% | {stats['mem_mean']:.1f}% | {stats['mem_gb']:.1f}GB | {stats['duration']:.0f}s"
+    global_summary += f"""
+## 🔹 {name.upper()}
 
-writer.add_text('summary', summary_text, 0)
+- **✅ Accuracy:** {acc:.3f}
+- **💻 CPU moyen:** {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)
+- **🧠 RAM moyenne:** {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)
+- **💾 Mémoire:** {stats['mem_gb']:.3f} GB
+- **⏱️ Durée:** {stats['duration']:.1f}s
 
-# 📊 DÉTAILS PAR MODÈLE - SANS ACCENTS
-details_text = "MODELS DETAILED PERFORMANCE"
-details_text += "\n============================"
+---
+
+"""
+
+# IMPORTANT: Utiliser step 0 pour le résumé global
+writer.add_text('00_RESUME_GLOBAL_PERFORMANCES', global_summary, 0)
+
+# Tableau comparatif
+comparison_table = """
+# 📊 TABLEAU COMPARATIF
+
+| Modèle | Accuracy | CPU Moyen | RAM Moyenne | Mémoire (GB) | Durée (s) |
+|--------|----------|-----------|-------------|--------------|-----------|
+"""
 
 for name in models.keys():
     stats = resources_stats[name]
     acc = results[name]
-    details_text += f"\n\n--- {name.upper()} ---"
-    details_text += f"\nAccuracy: {acc:.3f}"
-    details_text += f"\nCPU mean: {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)"
-    details_text += f"\nRAM mean: {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)"
-    details_text += f"\nMemory used: {stats['mem_gb']:.1f} GB"
-    details_text += f"\nTraining time: {stats['duration']:.0f} seconds"
+    comparison_table += f"| {name.upper()} | {acc:.3f} | {stats['cpu_mean']:.1f}% | {stats['mem_mean']:.1f}% | {stats['mem_gb']:.3f} | {stats['duration']:.1f} |\n"
 
-writer.add_text('details', details_text, 0)
+writer.add_text('01_TABLEAU_COMPARATIF', comparison_table, 0)
 
-# 📊 MEILLEUR MODÈLE
-best_model = max(results, key=results.get)
-best_text = f"BEST MODEL: {best_model}"
-best_text += f"\nBest Accuracy: {results[best_model]:.3f}"
-best_text += f"\nCPU Usage: {resources_stats[best_model]['cpu_mean']:.1f}%"
-best_text += f"\nRAM Usage: {resources_stats[best_model]['mem_mean']:.1f}%"
+# Comparaisons scalaires groupées
+cpu_dict = {name: resources_stats[name]['cpu_mean'] for name in models.keys()}
+ram_dict = {name: resources_stats[name]['mem_mean'] for name in models.keys()}
+acc_dict = {name: results[name] for name in models.keys()}
+mem_dict = {name: resources_stats[name]['mem_gb'] for name in models.keys()}
+dur_dict = {name: resources_stats[name]['duration'] for name in models.keys()}
 
-writer.add_text('best_model', best_text, 0)
+writer.add_scalars('Comparaison/CPU_Moyen', cpu_dict, 0)
+writer.add_scalars('Comparaison/RAM_Moyenne', ram_dict, 0)
+writer.add_scalars('Comparaison/Accuracy', acc_dict, 0)
+writer.add_scalars('Comparaison/Memoire_GB', mem_dict, 0)
+writer.add_scalars('Comparaison/Duree', dur_dict, 0)
 
-# Comparaisons scalaires
-for name in models.keys():
-    writer.add_scalars('comparison/cpu_mean', {name: resources_stats[name]['cpu_mean']}, 0)
-    writer.add_scalars('comparison/memory_mean', {name: resources_stats[name]['mem_mean']}, 0)
-    writer.add_scalars('comparison/accuracy', {name: results[name]}, 0)
-    writer.add_scalars('comparison/duration', {name: resources_stats[name]['duration']}, 0)
-
+# IMPORTANT: Flush et fermer
+writer.flush()
 writer.close()
+
+print("✅ Données écrites dans TensorBoard avec succès!")
 
 # 8. Sauvegarder infos features
 feature_info = {
@@ -267,17 +289,21 @@ for name, acc in results.items():
     print(f"  ✅ Accuracy: {acc:.3f}")
     print(f"  💻 CPU moyen: {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)")
     print(f"  🧠 RAM moyenne: {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)")
-    print(f"  💾 Mémoire: {stats['mem_gb']:.1f} GB")
-    print(f"  ⏱️  Durée: {stats['duration']:.0f}s")
+    print(f"  💾 Mémoire: {stats['mem_gb']:.3f} GB")
+    print(f"  ⏱️  Durée: {stats['duration']:.1f}s")
 
 print("\n" + "="*70)
 print(f"📊 TensorBoard logs sauvegardés dans: {LOGS_DIR}")
 print("🚀 Pour visualiser: tensorboard --logdir=" + LOGS_DIR)
-print("\n📋 GUIDE TENSORBOARD - RECHERCHE TEXT:")
-print("  1. Dans l'onglet TEXT, cherchez ces mots:")
-print("     - 'models' : pour voir chaque modèle")
-print("     - 'summary' : pour le tableau comparatif")
-print("     - 'details' : pour les détails complets")
-print("     - 'best_model' : pour le meilleur modèle")
-print("  2. Ou utilisez les SCALARS pour les graphiques")
+print("\n📋 GUIDE TENSORBOARD - Où trouver les informations:")
+print("  1. 🔠 Onglet TEXT:")
+print("     - '00_RESUME_GLOBAL_PERFORMANCES' : Résumé complet de tous les modèles")
+print("     - '01_TABLEAU_COMPARATIF' : Tableau comparatif")
+print("     - 'Performances_Modeles/' : Détails par modèle")
+print("  2. 📈 Onglet SCALARS:")
+print("     - 'Accuracy/' : Précision par modèle")
+print("     - 'CPU_Moyen/' et 'CPU_Max/' : Consommation CPU")
+print("     - 'RAM_Moyenne/' et 'RAM_Max/' : Utilisation mémoire")
+print("     - 'Comparaison/' : Graphiques comparatifs entre modèles")
+print("  3. 🔍 Astuce: Utilisez la barre de recherche pour filtrer")
 print("="*70)
