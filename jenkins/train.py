@@ -1,4 +1,3 @@
-# train.py
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC
@@ -88,6 +87,17 @@ class ResourceMonitor:
             'mem_gb': sum(self.memory_mb)/len(self.memory_mb) if self.memory_mb else 0
         }
 
+# 📊 Fonction pour créer des résumés simples TensorBoard
+def create_simple_summary(model_name, stats, accuracy):
+    return f"""
+{model_name.upper()}
+Accuracy: {accuracy:.3f}
+CPU: {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)
+RAM: {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)
+Memoire: {stats['mem_gb']:.1f} GB
+Duree: {stats['duration']:.0f}s
+"""
+
 # 1. Chargement des données
 iris = pd.read_csv(DATA_PATH)
 
@@ -170,18 +180,10 @@ for idx, (name, model) in enumerate(models.items()):
     results[name] = accuracy
     print(f"✅ {name} Accuracy: {accuracy:.3f}")
     
-    # 📊 Écriture dans TensorBoard - FORMAT CORRIGÉ
-    # Résumé texte pour chaque modèle
-    text_summary = f"""
-**RÉSUMÉ RESSOURCES - {name.upper()}**
-
-**Durée monitoring:** {stats['duration']:.0f} secondes
-**CPU moyen:** {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)
-**Mémoire moyenne:** {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)
-**Mémoire utilisée:** {stats['mem_gb']:.1f} GB
-**Accuracy:** {accuracy:.3f}
-"""
-    writer.add_text(f'model_resumes/{name}', text_summary, 0)
+    # 📊 Écriture dans TensorBoard - VERSION SIMPLIFIÉE
+    # Résumé texte simple pour chaque modèle
+    simple_summary = create_simple_summary(name, stats, accuracy)
+    writer.add_text(f'performance/{name}', simple_summary, 0)
     
     # Métriques scalaires
     writer.add_scalar(f'accuracy/{name}', accuracy, 0)
@@ -205,31 +207,42 @@ for idx, (name, model) in enumerate(models.items()):
     joblib.dump(model, os.path.join(MODELS_DIR, f"{name}_iris_model.pkl"))
     print(f"💾 Modèle sauvegardé: {os.path.join(MODELS_DIR, f'{name}_iris_model.pkl')}")
 
-# 📊 RÉSUMÉ GLOBAL dans TensorBoard
-global_summary = "# 💻 CONSOMMATION CPU/RAM PAR MODÈLE\n\n"
+# 📊 RÉSUMÉ GLOBAL dans TensorBoard - VERSION SIMPLIFIÉE
+global_text = "PERFORMANCES MODELES IRIS - COMPARAISON\\n\\n"
+global_text += "MODÈLE | ACCURACY | CPU MOYEN | RAM MOYENNE | MÉMOIRE | DURÉE\\n"
+global_text += "-------|----------|-----------|-------------|---------|-------\\n"
 
 for name in models.keys():
     stats = resources_stats[name]
     acc = results[name]
-    global_summary += f"""
-## {name.upper()}
+    global_text += f"{name.upper():12} | {acc:.3f} | {stats['cpu_mean']:.1f}% | {stats['mem_mean']:.1f}% | {stats['mem_gb']:.1f} GB | {stats['duration']:.0f}s\\n"
 
-**Durée:** {stats['duration']:.0f}s
-**CPU moyen:** {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)
-**Mémoire moyenne:** {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)
-**Mémoire utilisée:** {stats['mem_gb']:.1f} GB
-**Accuracy:** {acc:.3f}
+writer.add_text('COMPARAISON_MODELES', global_text, 0)
 
----
+# Résumé détaillé pour chaque modèle
+detailed_summary = "DÉTAILS PAR MODÈLE\\n\\n"
+for name in models.keys():
+    stats = resources_stats[name]
+    acc = results[name]
+    detailed_summary += f"""
+{name.upper()}
+--------
+Accuracy: {acc:.3f}
+CPU moyen: {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)
+RAM moyenne: {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)
+Mémoire utilisée: {stats['mem_gb']:.1f} GB
+Durée monitoring: {stats['duration']:.0f}s
+------------------------
 """
 
-writer.add_text('0_RESUME_GLOBAL', global_summary, 0)
+writer.add_text('DETAILS_MODELES', detailed_summary, 0)
 
-# Comparaisons scalaires
+# Comparaisons scalaires pour graphiques
 for name in models.keys():
     writer.add_scalars('comparison/cpu_mean', {name: resources_stats[name]['cpu_mean']}, 0)
     writer.add_scalars('comparison/memory_mean', {name: resources_stats[name]['mem_mean']}, 0)
     writer.add_scalars('comparison/accuracy', {name: results[name]}, 0)
+    writer.add_scalars('comparison/duration', {name: resources_stats[name]['duration']}, 0)
 
 writer.close()
 
@@ -258,13 +271,14 @@ print("\n" + "="*70)
 print(f"📊 TensorBoard logs sauvegardés dans: {LOGS_DIR}")
 print("🚀 Pour visualiser: tensorboard --logdir=" + LOGS_DIR)
 print("\n📋 GUIDE TENSORBOARD - Où trouver les informations:")
-print("  1. Onglet TEXT:")
-print("     - Cherchez '0_RESUME_GLOBAL' pour le résumé complet")
-print("     - Cherchez 'model_resumes/' pour chaque modèle")
+print("  1. Onglet TEXT - Cherchez ces termes:")
+print("     - 'performance/' : Détails par modèle")
+print("     - 'COMPARAISON_MODELES' : Tableau comparatif")
+print("     - 'DETAILS_MODELES' : Résumé détaillé")
 print("  2. Onglet SCALARS:")
 print("     - 'accuracy/' : Précision par modèle")
 print("     - 'cpu/' : Consommation CPU")
 print("     - 'memory/' : Utilisation mémoire")
-print("     - 'comparison/' : Comparaisons entre modèles")
+print("     - 'comparison/' : Graphiques comparatifs")
 print("  3. Utilisez la barre de recherche pour filtrer")
 print("="*70)
