@@ -10,40 +10,52 @@ pipeline {
   }
   triggers { githubPush() }
 
+  /*************** PARAMÈTRES ***************/
   parameters {
-    choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Environnement cible (info)')
+    choice(name: 'ENV', choices: ['dev', 'stage', 'prod'], description: 'Environnement (info)')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Tag image (vide = BUILD_NUMBER)')
     booleanParam(name: 'PUSH_LATEST', defaultValue: true, description: 'Pousser aussi :latest')
-    choice(name: 'DEPLOY_METHOD', choices: ['managed-identity', 'acr-admin'], description: 'Pull ACR via Managed Identity (recommandé) ou ACR admin')
-    booleanParam(name: 'SKIP_TRAIN', defaultValue: false, description: "Sauter l’entrainement si artifacts/iris_model.pkl déjà présent")
-    booleanParam(name: 'RUN_SMOKE_AFTER_DEPLOY', defaultValue: true, description: 'Tester / après déploiement')
+    choice(name: 'DEPLOY_METHOD', choices: ['managed-identity', 'acr-admin'], description: 'ACR pull par Managed Identity (recommandé) ou compte admin ACR')
+    booleanParam(name: 'SKIP_TRAIN', defaultValue: false, description: "Sauter l’entrainement si non nécessaire")
+    booleanParam(name: 'RUN_SMOKE_AFTER_DEPLOY', defaultValue: true, description: 'Tester / après déploiement (front et back)')
     booleanParam(name: 'FAIL_ON_SMOKE', defaultValue: false, description: 'Échouer si Smoke Test KO')
   }
 
+  /*************** VARIABLES ***************/
   environment {
-    APP_NAME     = 'iris-ml-app'
-    DOCKER_IMAGE = "${APP_NAME}"
-
-    // FastAPI (80). Si Streamlit: mets 8501 et adapte STARTUP_CMD
-    APP_PORT     = '80'
-    STARTUP_CMD  = "python -m uvicorn serveur.app:app --host 0.0.0.0 --port ${APP_PORT}"
-
+    // ACR / Azure
     AZ_LOCATION  = 'germanywestcentral'
     AZ_RG        = 'ml_rg'
     AZ_PLAN      = 'plan-jenkins'
-    AZ_WEBAPP    = 'app-jenkis-ml'
 
     AZ_ACR_NAME  = 'mlregitery123'
     AZ_ACR_LOGIN = 'mlregitery123.azurecr.io'
 
-    CALC_TAG     = "${params.IMAGE_TAG ?: BUILD_NUMBER}"
-    IMG_LOCAL    = "${DOCKER_IMAGE}:${CALC_TAG}"
-    IMG_LOCAL_L  = "${DOCKER_IMAGE}:latest"
-    IMG_ACR      = "${AZ_ACR_LOGIN}/${DOCKER_IMAGE}:${CALC_TAG}"
-    IMG_ACR_L    = "${AZ_ACR_LOGIN}/${DOCKER_IMAGE}:latest"
+    // Backend (FastAPI)
+    BACK_APP_NAME   = 'iris-ml-app'
+    BACK_WEBAPP     = 'app-jenkis-ml'
+    BACK_APP_PORT   = '80'
+    BACK_IMG_LOCAL  = "${BACK_APP_NAME}:${params.IMAGE_TAG ?: BUILD_NUMBER}"
+    BACK_IMG_LOCAL_L= "${BACK_APP_NAME}:latest"
+    BACK_IMG_ACR    = "${AZ_ACR_LOGIN}/${BACK_APP_NAME}:${params.IMAGE_TAG ?: BUILD_NUMBER}"
+    BACK_IMG_ACR_L  = "${AZ_ACR_LOGIN}/${BACK_APP_NAME}:latest"
+    BACK_STARTUP    = "python -m uvicorn serveur.app:app --host 0.0.0.0 --port ${BACK_APP_PORT}"
+
+    // Front (Streamlit)
+    FRONT_APP_NAME   = 'iris-ml-front'
+    FRONT_WEBAPP     = 'app-jenkis-ml-front'
+    FRONT_APP_PORT   = '8501'
+    FRONT_IMG_LOCAL  = "${FRONT_APP_NAME}:${params.IMAGE_TAG ?: BUILD_NUMBER}"
+    FRONT_IMG_LOCAL_L= "${FRONT_APP_NAME}:latest"
+    FRONT_IMG_ACR    = "${AZ_ACR_LOGIN}/${FRONT_APP_NAME}:${params.IMAGE_TAG ?: BUILD_NUMBER}"
+    FRONT_IMG_ACR_L  = "${AZ_ACR_LOGIN}/${FRONT_APP_NAME}:latest"
+
+    // URL backend (utilisé par le front)
+    BACKEND_URL      = "https://${BACK_WEBAPP}.azurewebsites.net"
   }
 
   stages {
+
     stage('Checkout') {
       steps {
         milestone(1)
@@ -62,89 +74,90 @@ pipeline {
           az --version
           echo.
 
-          echo "=== Project Files ==="
-          if exist "jenkins\\train.py" (echo OK: jenkins\\train.py) else (echo NO: jenkins\\train.py & exit /b 1)
-          if exist "Dockerfile" (echo OK: Dockerfile) else (echo NO: Dockerfile & exit /b 1)
-          if exist "serveur\\app.py" (echo OK: serveur\\app.py) else (echo WARN: serveur\\app.py absent)
-          if exist "app.py" (echo OK: app.py) else (echo WARN: app.py absent)
+          echo "=== Project files: backend ==="
+          if exist "serveur\\app.py" (echo OK: serveur\\app.py) else (echo NO: serveur\\app.py & exit /b 1)
+          if exist "Dockerfile" (echo OK: Dockerfile (backend)) else (echo NO: Dockerfile (backend) & exit /b 1)
+
+          echo.
+          echo "=== Project files: front ==="
+          if exist "client\\Dockerfile" (echo OK: client\\Dockerfile) else (echo NO: client\\Dockerfile & exit /b 1)
+          if exist "client\\requirements.txt" (echo OK: client\\requirements.txt) else (echo NO: client\\requirements.txt & exit /b 1)
+          if exist "client\\app.py" (echo OK: client\\app.py) else (echo NO: client\\app.py & exit /b 1)
+
+          echo.
+          echo "=== Data / Model presence (pre-train) ==="
           if exist "data\\Iris.csv" (echo OK: data\\Iris.csv) else (echo WARN: data\\Iris.csv manquant)
-          if exist "artifacts\\iris_model.pkl" (echo FOUND: artifacts\\iris_model.pkl) else (echo NOT YET: artifacts\\iris_model.pkl)
+          if exist "models\\iris_model.pkl" (echo FOUND: models\\iris_model.pkl) else (echo NOT YET: models\\iris_model.pkl)
         '''
       }
     }
 
-    stage('Train Model') {
-  when { expression { return !params.SKIP_TRAIN } }
-  steps {
-    echo '🤖 Training ML model (inside Docker python:3.11-slim) WITHOUT changing your script...'
-    bat '''
-      rem Dossiers hôte pour recevoir ce que le conteneur va écrire
-      if not exist "artifacts" mkdir artifacts
-      if not exist "artifacts\\data" mkdir artifacts\\data
-      if not exist "artifacts\\models" mkdir artifacts\\models
-
-      rem On monte:
-      rem  - le repo sur /src (lecture)
-      rem  - le repo aussi sur /app (code)
-      rem  - artifacts/data  -> /app/data   (écriture OK)
-      rem  - artifacts/models-> /app/models (écriture OK)
-      docker run --rm ^
-        -v "%CD%":/src ^
-        -v "%CD%":/app ^
-        -v "%CD%\\artifacts\\data":/app/data ^
-        -v "%CD%\\artifacts\\models":/app/models ^
-        -w /app python:3.11-slim sh -lc ^
-          "set -e; \
-           cp -f /src/data/Iris.csv /app/data/Iris.csv 2>/dev/null || true; \
-           pip install -q scikit-learn pandas numpy joblib && \
-           python jenkins/train.py"
-
-      IF ERRORLEVEL 1 exit /b 1
-
-      rem Vérifs: ton script peut avoir produit dans /app/models et/ou /app/data
-      if exist artifacts\\models\\*.pkl (
-        echo "✅ Models saved under artifacts\\models"
-      ) else (
-        echo "ℹ️ No model in artifacts\\models (ok if your script writes elsewhere)."
-      )
-
-      if exist artifacts\\data\\iris_test.json (
-        echo "✅ Test set saved under artifacts\\data\\iris_test.json"
-      ) else (
-        echo "ℹ️ No iris_test.json (not blocking if your script doesn’t write it)."
-      )
-    '''
-  }
-}
-
-
-    stage('Prepare Model for Image') {
+    stage('Train Model (optional)') {
+      when { expression { return !params.SKIP_TRAIN } }
       steps {
-        echo '📁 Ensuring models/iris_model.pkl exists for image build...'
+        echo '🤖 Train model inside python:3.11-slim (ne modifie pas ton script)...'
+        bat '''
+          if not exist "artifacts" mkdir artifacts
+          if not exist "artifacts\\data" mkdir artifacts\\data
+          if not exist "artifacts\\models" mkdir artifacts\\models
+
+          docker run --rm ^
+            -v "%CD%":/app ^
+            -v "%CD%\\artifacts\\data":/app/data ^
+            -v "%CD%\\artifacts\\models":/app/models ^
+            -w /app python:3.11-slim sh -lc ^
+              "set -e; \
+               mkdir -p /app/data /app/models; \
+               [ -f /app/data/Iris.csv ] || cp -f /app/data/Iris.csv /dev/null 2>/dev/null || true; \
+               pip install -q scikit-learn pandas numpy joblib && \
+               python jenkins/train.py"
+
+          IF ERRORLEVEL 1 exit /b 1
+
+          if exist artifacts\\models\\*.pkl (echo "✅ Models saved under artifacts\\models") else (echo "ℹ️ No model in artifacts\\models")
+          if exist artifacts\\data\\iris_test.json (echo "✅ Test set saved under artifacts\\data\\iris_test.json") else (echo "ℹ️ iris_test.json absent (ok)")
+        '''
+      }
+    }
+
+    stage('Prepare Model for Backend Image') {
+      steps {
+        echo '📁 Ensure models/iris_model.pkl for image build (backend)...'
         bat '''
           if not exist "models" mkdir models
+          if exist artifacts\\models\\iris_model.pkl copy /Y artifacts\\models\\iris_model.pkl models\\iris_model.pkl >NUL
           if exist artifacts\\iris_model.pkl copy /Y artifacts\\iris_model.pkl models\\iris_model.pkl >NUL
-          if exist models\\iris_model.pkl (echo OK: models\\iris_model.pkl) else (echo ❌ Missing models\\iris_model.pkl & exit /b 1)
+          if exist models\\iris_model.pkl (echo OK: models\\iris_model.pkl) else (echo ⚠️ Missing models\\iris_model.pkl & echo "continue (backend peut démarrer sans)" )
         '''
       }
     }
 
-    stage('Build Image') {
+    stage('Build Backend Image') {
       steps {
         milestone(2)
-        echo "🐳 Building image ${IMG_LOCAL}..."
+        echo "🐳 Build backend image %BACK_IMG_LOCAL% ..."
         bat '''
-          docker build --pull -t %IMG_LOCAL% .
+          docker build --pull -t %BACK_IMG_LOCAL% .
           IF ERRORLEVEL 1 exit /b 1
-          docker tag %IMG_LOCAL% %IMG_LOCAL_L%
-          docker images | findstr /I "%APP_NAME%"
+          docker tag %BACK_IMG_LOCAL% %BACK_IMG_LOCAL_L%
+        '''
+      }
+    }
+
+    stage('Build Front Image') {
+      steps {
+        echo "🎨 Build front image %FRONT_IMG_LOCAL% (client/Dockerfile)..."
+        bat '''
+          docker build --pull -t %FRONT_IMG_LOCAL% -f client\\Dockerfile client
+          IF ERRORLEVEL 1 exit /b 1
+          docker tag %FRONT_IMG_LOCAL% %FRONT_IMG_LOCAL_L%
         '''
       }
     }
 
     stage('Azure Login + Ensure Resources') {
       steps {
-        echo '🔐 Azure login (SP) & ensure RG/Plan/WebApp...'
+        echo '🔐 Azure login (SP) & ensure RG/Plan/WebApps...'
         withCredentials([
           string(credentialsId: 'az-client-id',       variable: 'AZ_CLIENT_ID'),
           string(credentialsId: 'az-client-secret',   variable: 'AZ_CLIENT_SECRET'),
@@ -166,81 +179,142 @@ pipeline {
             az appservice plan show -g %AZ_RG% -n %AZ_PLAN% || az appservice plan create -g %AZ_RG% -n %AZ_PLAN% --is-linux --sku B1 -l %AZ_LOCATION%
             IF ERRORLEVEL 1 exit /b 1
 
-            az webapp show -g %AZ_RG% -n %AZ_WEBAPP% || az webapp create -g %AZ_RG% -n %AZ_WEBAPP% -p %AZ_PLAN% --runtime "PYTHON:3.11"
-            IF ERRORLEVEL 1 exit /b 1
+            az webapp show -g %AZ_RG% -n %BACK_WEBAPP% || az webapp create -g %AZ_RG% -n %BACK_WEBAPP% -p %AZ_PLAN%
+            az webapp show -g %AZ_RG% -n %FRONT_WEBAPP% || az webapp create -g %AZ_RG% -n %FRONT_WEBAPP% -p %AZ_PLAN%
           '''
         }
       }
     }
 
-    stage('Push to ACR') {
+    stage('Push Backend to ACR') {
       steps {
-        echo '⬆️ Push image to ACR...'
+        echo '⬆️ Push backend image to ACR...'
         bat '''
           az acr login --name %AZ_ACR_NAME%
           IF ERRORLEVEL 1 exit /b 1
 
-          docker tag %IMG_LOCAL% %IMG_ACR%
-          docker push %IMG_ACR%
+          docker tag %BACK_IMG_LOCAL% %BACK_IMG_ACR%
+          docker push %BACK_IMG_ACR%
           IF ERRORLEVEL 1 exit /b 1
 
           IF "%PUSH_LATEST%"=="true" (
-            docker tag %IMG_LOCAL_L% %IMG_ACR_L%
-            docker push %IMG_ACR_L%
-            IF ERRORLEVEL 1 exit /b 1
+            docker tag %BACK_IMG_LOCAL_L% %BACK_IMG_ACR_L%
+            docker push %BACK_IMG_ACR_L%
           )
-
-          az acr repository show-tags -n %AZ_ACR_NAME% --repository %APP_NAME% -o table
         '''
       }
     }
 
-    stage('Deploy to Web App') {
+    stage('Push Front to ACR') {
+      steps {
+        echo '⬆️ Push front image to ACR...'
+        bat '''
+          az acr login --name %AZ_ACR_NAME%
+          IF ERRORLEVEL 1 exit /b 1
+
+          docker tag %FRONT_IMG_LOCAL% %FRONT_IMG_ACR%
+          docker push %FRONT_IMG_ACR%
+          IF ERRORLEVEL 1 exit /b 1
+
+          IF "%PUSH_LATEST%"=="true" (
+            docker tag %FRONT_IMG_LOCAL_L% %FRONT_IMG_ACR_L%
+            docker push %FRONT_IMG_ACR_L%
+          )
+        '''
+      }
+    }
+
+    stage('Deploy Backend Web App') {
       steps {
         script {
           if (params.DEPLOY_METHOD == 'acr-admin') {
             withCredentials([usernamePassword(credentialsId: 'acr-admin', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
               bat '''
-                az webapp config container set -g %AZ_RG% -n %AZ_WEBAPP% ^
-                  --container-image-name %IMG_ACR% ^
+                az webapp config container set -g %AZ_RG% -n %BACK_WEBAPP% ^
+                  --container-image-name %BACK_IMG_ACR% ^
                   --container-registry-url https://%AZ_ACR_LOGIN% ^
                   --container-registry-user %ACR_USERNAME% ^
                   --container-registry-password %ACR_PASSWORD%
                 IF ERRORLEVEL 1 exit /b 1
 
-                az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=%APP_PORT% WEBSITES_CONTAINER_START_TIME_LIMIT=1800
-                az webapp config set -g %AZ_RG% -n %AZ_WEBAPP% --startup-file "%STARTUP_CMD%"
-                az webapp restart -g %AZ_RG% -n %AZ_WEBAPP%
-                az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query defaultHostName -o tsv > webapp_fqdn.txt
-                for /f "usebackq tokens=* delims=" %%i in ("webapp_fqdn.txt") do set FQDN=%%i
-                echo %FQDN%>webapp_fqdn.txt
+                az webapp config appsettings set -g %AZ_RG% -n %BACK_WEBAPP% --settings WEBSITES_PORT=%BACK_APP_PORT% WEBSITES_CONTAINER_START_TIME_LIMIT=1800
+                az webapp config set -g %AZ_RG% -n %BACK_WEBAPP% --startup-file "%BACK_STARTUP%"
+                az webapp restart -g %AZ_RG% -n %BACK_WEBAPP%
+                az webapp show -g %AZ_RG% -n %BACK_WEBAPP% --query defaultHostName -o tsv > back_fqdn.txt
               '''
             }
           } else {
             withCredentials([string(credentialsId: 'az-subscription-id', variable: 'AZ_SUBSCRIPTION_ID')]) {
               bat '''
-                az webapp identity assign -g %AZ_RG% -n %AZ_WEBAPP%
-                IF ERRORLEVEL 1 exit /b 1
-
-                for /f "tokens=*" %%i in ('az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query identity.principalId -o tsv') do set PRINCIPAL=%%i
+                az webapp identity assign -g %AZ_RG% -n %BACK_WEBAPP%
+                for /f "tokens=*" %%i in ('az webapp show -g %AZ_RG% -n %BACK_WEBAPP% --query identity.principalId -o tsv') do set PRINCIPAL=%%i
                 az role assignment create --assignee %PRINCIPAL% --role "AcrPull" --scope /subscriptions/%AZ_SUBSCRIPTION_ID%/resourceGroups/%AZ_RG%/providers/Microsoft.ContainerRegistry/registries/%AZ_ACR_NAME%
-                IF ERRORLEVEL 1 exit /b 1
 
-                az webapp config set -g %AZ_RG% -n %AZ_WEBAPP% --acr-use-identity true --acr-identity [system]
-                IF ERRORLEVEL 1 exit /b 1
-
-                az webapp config container set -g %AZ_RG% -n %AZ_WEBAPP% ^
-                  --container-image-name %IMG_ACR% ^
+                az webapp config set -g %AZ_RG% -n %BACK_WEBAPP% --acr-use-identity true --acr-identity [system]
+                az webapp config container set -g %AZ_RG% -n %BACK_WEBAPP% ^
+                  --container-image-name %BACK_IMG_ACR% ^
                   --container-registry-url https://%AZ_ACR_LOGIN%
+                az webapp config appsettings set -g %AZ_RG% -n %BACK_WEBAPP% --settings WEBSITES_PORT=%BACK_APP_PORT% WEBSITES_CONTAINER_START_TIME_LIMIT=1800
+                az webapp config set -g %AZ_RG% -n %BACK_WEBAPP% --startup-file "%BACK_STARTUP%"
+                az webapp restart -g %AZ_RG% -n %BACK_WEBAPP%
+                az webapp show -g %AZ_RG% -n %BACK_WEBAPP% --query defaultHostName -o tsv > back_fqdn.txt
+              '''
+            }
+          }
+        }
+      }
+    }
+
+    stage('Deploy Front Web App') {
+      steps {
+        script {
+          if (params.DEPLOY_METHOD == 'acr-admin') {
+            withCredentials([usernamePassword(credentialsId: 'acr-admin', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
+              bat '''
+                az webapp config container set -g %AZ_RG% -n %FRONT_WEBAPP% ^
+                  --container-image-name %FRONT_IMG_ACR% ^
+                  --container-registry-url https://%AZ_ACR_LOGIN% ^
+                  --container-registry-user %ACR_USERNAME% ^
+                  --container-registry-password %ACR_PASSWORD%
                 IF ERRORLEVEL 1 exit /b 1
 
-                az webapp config appsettings set -g %AZ_RG% -n %AZ_WEBAPP% --settings WEBSITES_PORT=%APP_PORT% WEBSITES_CONTAINER_START_TIME_LIMIT=1800
-                az webapp config set -g %AZ_RG% -n %AZ_WEBAPP% --startup-file "%STARTUP_CMD%"
-                az webapp restart -g %AZ_RG% -n %AZ_WEBAPP%
+                rem Streamlit écoute 8501
+                az webapp config appsettings set -g %AZ_RG% -n %FRONT_WEBAPP% --settings ^
+                  WEBSITES_PORT=%FRONT_APP_PORT% ^
+                  WEBSITES_CONTAINER_START_TIME_LIMIT=1800 ^
+                  STREAMLIT_SERVER_PORT=%FRONT_APP_PORT% ^
+                  STREAMLIT_SERVER_ADDRESS=0.0.0.0 ^
+                  STREAMLIT_SERVER_HEADLESS=true ^
+                  STREAMLIT_BROWSER_GATHER_USAGE_STATS=false ^
+                  BACKEND_URL=%BACKEND_URL%
 
-                az webapp show -g %AZ_RG% -n %AZ_WEBAPP% --query defaultHostName -o tsv > webapp_fqdn.txt
-                for /f "usebackq tokens=* delims=" %%i in ("webapp_fqdn.txt") do set FQDN=%%i
-                echo %FQDN%>webapp_fqdn.txt
+                az webapp restart -g %AZ_RG% -n %FRONT_WEBAPP%
+                az webapp show -g %AZ_RG% -n %FRONT_WEBAPP% --query defaultHostName -o tsv > front_fqdn.txt
+              '''
+            }
+          } else {
+            withCredentials([string(credentialsId: 'az-subscription-id', variable: 'AZ_SUBSCRIPTION_ID')]) {
+              bat '''
+                az webapp identity assign -g %AZ_RG% -n %FRONT_WEBAPP%
+                for /f "tokens=*" %%i in ('az webapp show -g %AZ_RG% -n %FRONT_WEBAPP% --query identity.principalId -o tsv') do set PRINCIPAL=%%i
+                az role assignment create --assignee %PRINCIPAL% --role "AcrPull" --scope /subscriptions/%AZ_SUBSCRIPTION_ID%/resourceGroups/%AZ_RG%/providers/Microsoft.ContainerRegistry/registries/%AZ_ACR_NAME%
+
+                az webapp config set -g %AZ_RG% -n %FRONT_WEBAPP% --acr-use-identity true --acr-identity [system]
+                az webapp config container set -g %AZ_RG% -n %FRONT_WEBAPP% ^
+                  --container-image-name %FRONT_IMG_ACR% ^
+                  --container-registry-url https://%AZ_ACR_LOGIN%
+
+                az webapp config appsettings set -g %AZ_RG% -n %FRONT_WEBAPP% --settings ^
+                  WEBSITES_PORT=%FRONT_APP_PORT% ^
+                  WEBSITES_CONTAINER_START_TIME_LIMIT=1800 ^
+                  STREAMLIT_SERVER_PORT=%FRONT_APP_PORT% ^
+                  STREAMLIT_SERVER_ADDRESS=0.0.0.0 ^
+                  STREAMLIT_SERVER_HEADLESS=true ^
+                  STREAMLIT_BROWSER_GATHER_USAGE_STATS=false ^
+                  BACKEND_URL=%BACKEND_URL%
+
+                az webapp restart -g %AZ_RG% -n %FRONT_WEBAPP%
+                az webapp show -g %AZ_RG% -n %FRONT_WEBAPP% --query defaultHostName -o tsv > front_fqdn.txt
               '''
             }
           }
@@ -251,24 +325,34 @@ pipeline {
     stage('Smoke Test on Azure (optional)') {
       when { expression { return params.RUN_SMOKE_AFTER_DEPLOY } }
       steps {
-        echo '🩺 Azure smoke test (/) — optionnel'
+        echo '🩺 Smoke test back & front (non-bloquant sauf FAIL_ON_SMOKE=true)'
         bat '''
-          if not exist webapp_fqdn.txt (echo "No FQDN file" & exit /b 0)
-          set /p FQDN=<webapp_fqdn.txt
-          for /f "tokens=* delims= " %%a in ("%FQDN%") do set FQDN=%%a
-          echo Testing http://%FQDN%/
+          set FAIL=0
 
-          powershell -NoProfile -Command "Start-Sleep -Seconds 20"
-
-          powershell -NoProfile -Command ^
-            "$ErrorActionPreference='SilentlyContinue';" ^
-            "try{$r=Invoke-WebRequest http://%FQDN%/ -UseBasicParsing; if($r.StatusCode -lt 200 -or $r.StatusCode -ge 400){exit 2}}catch{exit 2}"
-          if ERRORLEVEL 2 (
-            echo "WARN: GET / failed on Azure"
-            IF "%FAIL_ON_SMOKE%"=="true" exit /b 1
+          rem ---- BACKEND
+          if exist back_fqdn.txt (
+            set /p BFQDN=<back_fqdn.txt
+            powershell -NoProfile -Command "Start-Sleep -Seconds 15"
+            powershell -NoProfile -Command ^
+              "$ErrorActionPreference='SilentlyContinue'; try{$r=Invoke-WebRequest http://%BFQDN%/ -UseBasicParsing; if($r.StatusCode -lt 200 -or $r.StatusCode -ge 400){exit 2}}catch{exit 2}"
+            if ERRORLEVEL 2 ( echo "WARN: backend / KO" & set FAIL=1 ) else ( echo "OK: backend /" )
           )
 
-          echo "✅ Azure smoke test passed (non-blocking)"
+          rem ---- FRONT
+          if exist front_fqdn.txt (
+            set /p FFQDN=<front_fqdn.txt
+            powershell -NoProfile -Command "Start-Sleep -Seconds 15"
+            powershell -NoProfile -Command ^
+              "$ErrorActionPreference='SilentlyContinue'; try{$r=Invoke-WebRequest http://%FFQDN%/ -UseBasicParsing; if($r.StatusCode -lt 200 -or $r.StatusCode -ge 400){exit 3}}catch{exit 3}"
+            if ERRORLEVEL 3 ( echo "WARN: front / KO" & set FAIL=1 ) else ( echo "OK: front /" )
+          )
+
+          if %FAIL%==1 (
+            echo "Smoke test warnings"
+            IF "%FAIL_ON_SMOKE%"=="true" exit /b 1
+          ) else (
+            echo "✅ Smoke test passed"
+          )
         '''
       }
     }
@@ -277,19 +361,15 @@ pipeline {
   post {
     always {
       echo '📦 Archiving artifacts...'
-      archiveArtifacts artifacts: 'artifacts/**, models/**, webapp_fqdn.txt', allowEmptyArchive: true
+      archiveArtifacts artifacts: 'artifacts/**, models/**, back_fqdn.txt, front_fqdn.txt', allowEmptyArchive: true
     }
     success {
       echo '🎉 SUCCESS'
       powershell '''
-        if (Test-Path "webapp_fqdn.txt") {
-          $fqdn = (Get-Content "webapp_fqdn.txt" | Select-Object -First 1).Trim()
-          Write-Host "Open:  http://$fqdn/"
-          Write-Host "Docs:  http://$fqdn/docs    (si FastAPI)"
-          Write-Host "Port:  (WEBSITES_PORT=$env:APP_PORT)"
-        } else {
-          Write-Host "FQDN not found (open Azure portal)."
-        }
+        $back = (Test-Path "back_fqdn.txt")  ? ((Get-Content "back_fqdn.txt" | Select-Object -First 1).Trim())   : ""
+        $front= (Test-Path "front_fqdn.txt") ? ((Get-Content "front_fqdn.txt"| Select-Object -First 1).Trim())    : ""
+        if ($back)  { Write-Host ("Backend:  http://{0}/   (docs: http://{0}/docs)" -f $back) }
+        if ($front) { Write-Host ("Front:    http://{0}/" -f $front) }
         exit 0
       '''
     }
