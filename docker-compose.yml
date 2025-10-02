@@ -11,14 +11,13 @@ services:
     volumes:
       - ./serveur:/app
       - ./serveur/models:/app/models
-      - ./serveur/logs/tensorboard:/app/logs/tensorboard  # Ajout du volume pour TensorBoard
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
     networks:
       iris-network:
         aliases:
-          - backend
+          - backend  # AJOUTEZ CETTE LIGNE
 
   client:
     build:
@@ -33,21 +32,22 @@ services:
       - serveur
     environment:
       - PYTHONUNBUFFERED=1
-      - API_URL=http://backend:8000
+      - API_URL=http://backend:8000  # Maintenant "backend" fonctionnera
     networks:
       - iris-network
 
   tensorboard:
-    image: tensorflow/tensorflow:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.tensorboard
+    image: iris-tensorboard:latest
     ports:
       - "6006:6006"
     volumes:
-      - ./serveur/logs/tensorboard:/tensorboard_logs:ro
-    command: tensorboard --logdir=/tensorboard_logs --host=0.0.0.0 --port=6006 --reload_interval=5 --bind_all
+      - ./artifacts/tensorboard:/tensorboard_logs
+    command: tensorboard --logdir=/tensorboard_logs --host=0.0.0.0 --port=6006 --reload_interval=5
     networks:
       - iris-network
-    depends_on:
-      - serveur
 
 networks:
   iris-network:

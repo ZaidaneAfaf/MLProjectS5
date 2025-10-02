@@ -1,19 +1,13 @@
-FROM python:3.9-slim
+# Dockerfile.tensorboard
+FROM tensorflow/tensorflow:2.13.0
 
-# Installer TensorBoard avec NumPy compatible
-RUN pip install --no-cache-dir \
-    tensorboard==2.15.1 \
-    protobuf==3.20.3 \
-    numpy==1.26.4
+# Installer psutil pour le monitoring
+RUN pip install psutil matplotlib
 
-# Créer le répertoire des logs
-RUN mkdir -p /tensorboard_logs
+WORKDIR /app
 
 # Exposer le port TensorBoard
 EXPOSE 6006
 
-# Point d'entrée par défaut
-ENTRYPOINT ["tensorboard"]
-
-# Arguments par défaut
-CMD ["--logdir=/tensorboard_logs", "--host=0.0.0.0", "--port=6006"]
+# Commande par défaut
+CMD ["tensorboard", "--logdir=/tensorboard_logs", "--host=0.0.0.0", "--port=6006", "--reload_interval=5"]
