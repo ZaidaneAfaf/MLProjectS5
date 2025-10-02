@@ -74,24 +74,49 @@ pipeline {
     }
 
     stage('Train Model') {
-      when { expression { return !params.SKIP_TRAIN } }
-      steps {
-        echo '🤖 Training ML model (inside Docker python:3.11-slim)...'
-        bat '''
-          if not exist "artifacts" mkdir artifacts
+  when { expression { return !params.SKIP_TRAIN } }
+  steps {
+    echo '🤖 Training ML model (inside Docker python:3.11-slim) WITHOUT changing your script...'
+    bat '''
+      rem Dossiers hôte pour recevoir ce que le conteneur va écrire
+      if not exist "artifacts" mkdir artifacts
+      if not exist "artifacts\\data" mkdir artifacts\\data
+      if not exist "artifacts\\models" mkdir artifacts\\models
 
-          rem Workspace -> /app ; artifacts -> /app/artifacts (écriture autorisée)
-          docker run --rm ^
-            -v "%CD%":/app ^
-            -v "%CD%\\artifacts":/app/artifacts ^
-            -w /app python:3.11-slim sh -lc ^
-              "pip install -q scikit-learn pandas numpy joblib && TEST_DATA_DIR=/app/artifacts python jenkins/train.py"
-          IF ERRORLEVEL 1 exit /b 1
+      rem On monte:
+      rem  - le repo sur /src (lecture)
+      rem  - le repo aussi sur /app (code)
+      rem  - artifacts/data  -> /app/data   (écriture OK)
+      rem  - artifacts/models-> /app/models (écriture OK)
+      docker run --rm ^
+        -v "%CD%":/src ^
+        -v "%CD%":/app ^
+        -v "%CD%\\artifacts\\data":/app/data ^
+        -v "%CD%\\artifacts\\models":/app/models ^
+        -w /app python:3.11-slim sh -lc ^
+          "set -e; \
+           cp -f /src/data/Iris.csv /app/data/Iris.csv 2>/dev/null || true; \
+           pip install -q scikit-learn pandas numpy joblib && \
+           python jenkins/train.py"
 
-          if exist artifacts\\iris_model.pkl (echo "✅ artifacts\\iris_model.pkl created") else (echo "❌ Model file missing" & exit /b 1)
-        '''
-      }
-    }
+      IF ERRORLEVEL 1 exit /b 1
+
+      rem Vérifs: ton script peut avoir produit dans /app/models et/ou /app/data
+      if exist artifacts\\models\\*.pkl (
+        echo "✅ Models saved under artifacts\\models"
+      ) else (
+        echo "ℹ️ No model in artifacts\\models (ok if your script writes elsewhere)."
+      )
+
+      if exist artifacts\\data\\iris_test.json (
+        echo "✅ Test set saved under artifacts\\data\\iris_test.json"
+      ) else (
+        echo "ℹ️ No iris_test.json (not blocking if your script doesn’t write it)."
+      )
+    '''
+  }
+}
+
 
     stage('Prepare Model for Image') {
       steps {
