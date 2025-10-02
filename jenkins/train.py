@@ -1,3 +1,4 @@
+# train.py
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC
@@ -12,6 +13,7 @@ import threading
 import time
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
+import shutil
 
 # 🔹 Répertoire de base (où est le script)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -21,6 +23,11 @@ DATA_PATH = os.path.join(BASE_DIR, "..", "data", "Iris.csv")
 MODELS_DIR = os.path.join(BASE_DIR, "..", "models")
 LOGS_DIR = os.path.join(BASE_DIR, "..", "logs", "tensorboard")
 os.makedirs(MODELS_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
+
+# 🔹 NETTOYAGE DES LOGS EXISTANTS
+if os.path.exists(LOGS_DIR):
+    shutil.rmtree(LOGS_DIR)
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 # 📊 Classe pour monitorer CPU/RAM
@@ -163,38 +170,32 @@ for idx, (name, model) in enumerate(models.items()):
     results[name] = accuracy
     print(f"✅ {name} Accuracy: {accuracy:.3f}")
     
-    # 📊 Écriture dans TensorBoard - RÉSUMÉ CPU/RAM
-    resume_text = f"""## 📊 RÉSUMÉ RESSOURCES - {name.upper()}
+    # 📊 Écriture dans TensorBoard - FORMAT CORRIGÉ
+    # Résumé texte pour chaque modèle
+    text_summary = f"""
+**RÉSUMÉ RESSOURCES - {name.upper()}**
 
-⏱️  **Durée monitoring:** {stats['duration']:.0f} secondes  
-💻 **CPU moyen:** {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)  
-🧠 **Mémoire moyenne:** {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)  
-💾 **Mémoire utilisée:** {stats['mem_gb']:.3f} GB  
-✅ **Accuracy:** {accuracy:.3f}
+**Durée monitoring:** {stats['duration']:.0f} secondes
+**CPU moyen:** {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)
+**Mémoire moyenne:** {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)
+**Mémoire utilisée:** {stats['mem_gb']:.1f} GB
+**Accuracy:** {accuracy:.3f}
 """
-    writer.add_text(f'Resume_Ressources/{name}', resume_text, 0)
+    writer.add_text(f'model_resumes/{name}', text_summary, 0)
     
-    # Métriques scalaires pour graphiques
-    writer.add_scalar(f'Metrics/accuracy', accuracy, idx)
-    writer.add_scalar(f'Resources_CPU/mean', stats['cpu_mean'], idx)
-    writer.add_scalar(f'Resources_CPU/max', stats['cpu_max'], idx)
-    writer.add_scalar(f'Resources_Memory/mean_percent', stats['mem_mean'], idx)
-    writer.add_scalar(f'Resources_Memory/max_percent', stats['mem_max'], idx)
-    writer.add_scalar(f'Resources_Memory/gb', stats['mem_gb'], idx)
-    writer.add_scalar(f'Training/duration_seconds', stats['duration'], idx)
+    # Métriques scalaires
+    writer.add_scalar(f'accuracy/{name}', accuracy, 0)
+    writer.add_scalar(f'cpu/mean/{name}', stats['cpu_mean'], 0)
+    writer.add_scalar(f'cpu/max/{name}', stats['cpu_max'], 0)
+    writer.add_scalar(f'memory/mean/{name}', stats['mem_mean'], 0)
+    writer.add_scalar(f'memory/max/{name}', stats['mem_max'], 0)
+    writer.add_scalar(f'memory/gb/{name}', stats['mem_gb'], 0)
+    writer.add_scalar(f'duration/{name}', stats['duration'], 0)
     
-    # Test rapide - SÉPARÉ dans un autre tag
+    # Test rapide
     test_data_sample = X_test.iloc[0:1]
     pred = model.predict(test_data_sample)[0]
     proba = model.predict_proba(test_data_sample).max()
-    
-    test_text = f"""## 🧪 Test Prédiction - {name.upper()}
-
-**Input:** {test_data_sample.values.tolist()}  
-**Prédiction:** {pred}  
-**Confiance:** {proba:.3f}
-"""
-    writer.add_text(f'Tests_Predictions/{name}', test_text, 0)
 
     print(f"🧪 Test {name}:")
     print(f"Input: {test_data_sample.values}")
@@ -204,34 +205,31 @@ for idx, (name, model) in enumerate(models.items()):
     joblib.dump(model, os.path.join(MODELS_DIR, f"{name}_iris_model.pkl"))
     print(f"💾 Modèle sauvegardé: {os.path.join(MODELS_DIR, f'{name}_iris_model.pkl')}")
 
-# 📊 RÉSUMÉ GLOBAL - Onglet séparé
-global_summary = """# 📊 RÉSUMÉ GLOBAL - TOUS LES MODÈLES
-
-## Comparaison des Performances
-
-"""
+# 📊 RÉSUMÉ GLOBAL dans TensorBoard
+global_summary = "# 💻 CONSOMMATION CPU/RAM PAR MODÈLE\n\n"
 
 for name in models.keys():
     stats = resources_stats[name]
     acc = results[name]
     global_summary += f"""
-### 🔹 {name.upper()}
-- **Accuracy:** {acc:.3f}  
-- **CPU moyen:** {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)  
-- **Mémoire moyenne:** {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)  
-- **Mémoire utilisée:** {stats['mem_gb']:.3f} GB  
-- **Durée:** {stats['duration']:.0f}s
+## {name.upper()}
+
+**Durée:** {stats['duration']:.0f}s
+**CPU moyen:** {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)
+**Mémoire moyenne:** {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)
+**Mémoire utilisée:** {stats['mem_gb']:.1f} GB
+**Accuracy:** {acc:.3f}
 
 ---
 """
 
-writer.add_text('RESUME_GLOBAL/comparaison', global_summary, 0)
+writer.add_text('0_RESUME_GLOBAL', global_summary, 0)
 
-# Scalaires de comparaison groupés
-for idx, name in enumerate(models.keys()):
-    writer.add_scalar('Comparison/CPU_mean', resources_stats[name]['cpu_mean'], idx)
-    writer.add_scalar('Comparison/Memory_percent', resources_stats[name]['mem_mean'], idx)
-    writer.add_scalar('Comparison/Accuracy', results[name], idx)
+# Comparaisons scalaires
+for name in models.keys():
+    writer.add_scalars('comparison/cpu_mean', {name: resources_stats[name]['cpu_mean']}, 0)
+    writer.add_scalars('comparison/memory_mean', {name: resources_stats[name]['mem_mean']}, 0)
+    writer.add_scalars('comparison/accuracy', {name: results[name]}, 0)
 
 writer.close()
 
@@ -253,15 +251,20 @@ for name, acc in results.items():
     print(f"  ✅ Accuracy: {acc:.3f}")
     print(f"  💻 CPU moyen: {stats['cpu_mean']:.1f}% (max: {stats['cpu_max']:.1f}%)")
     print(f"  🧠 RAM moyenne: {stats['mem_mean']:.1f}% (max: {stats['mem_max']:.1f}%)")
-    print(f"  💾 Mémoire: {stats['mem_gb']:.3f} GB")
+    print(f"  💾 Mémoire: {stats['mem_gb']:.1f} GB")
     print(f"  ⏱️  Durée: {stats['duration']:.0f}s")
 
 print("\n" + "="*70)
 print(f"📊 TensorBoard logs sauvegardés dans: {LOGS_DIR}")
 print("🚀 Pour visualiser: tensorboard --logdir=" + LOGS_DIR)
-print("\n📋 Dans TensorBoard, consultez:")
-print("  - Onglet TEXT > Resume_Ressources/* : CPU/RAM par modèle")
-print("  - Onglet TEXT > RESUME_GLOBAL/comparaison : Vue d'ensemble")
-print("  - Onglet TEXT > Tests_Predictions/* : Prédictions tests")
-print("  - Onglet SCALARS : Graphiques et comparaisons")
+print("\n📋 GUIDE TENSORBOARD - Où trouver les informations:")
+print("  1. Onglet TEXT:")
+print("     - Cherchez '0_RESUME_GLOBAL' pour le résumé complet")
+print("     - Cherchez 'model_resumes/' pour chaque modèle")
+print("  2. Onglet SCALARS:")
+print("     - 'accuracy/' : Précision par modèle")
+print("     - 'cpu/' : Consommation CPU")
+print("     - 'memory/' : Utilisation mémoire")
+print("     - 'comparison/' : Comparaisons entre modèles")
+print("  3. Utilisez la barre de recherche pour filtrer")
 print("="*70)
