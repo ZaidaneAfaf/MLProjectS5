@@ -206,24 +206,31 @@ pipeline {
       }
     }
 
-    stage('Push Front to ACR') {
-      steps {
-        echo '⬆️ Push front image to ACR...'
-        bat '''
-          az acr login --name %AZ_ACR_NAME%
-          IF ERRORLEVEL 1 exit /b 1
+   stage('Push Front to ACR') {
+  steps {
+    echo '⬆️ Push front image to ACR...'
+    bat """
+      az acr login --name %AZ_ACR_NAME%
+      IF ERRORLEVEL 1 exit /b 1
 
-          docker tag %FRONT_IMG_LOCAL% %FRONT_IMG_ACR%
-          docker push %FRONT_IMG_ACR%
-          IF ERRORLEVEL 1 exit /b 1
+      docker tag %FRONT_IMG_LOCAL% %FRONT_IMG_ACR%
+      IF ERRORLEVEL 1 exit /b 1
 
-          IF "%PUSH_LATEST%"=="true" (
-            docker tag %FRONT_IMG_LOCAL_L% %FRONT_IMG_ACR_L%
-            docker push %FRONT_IMG_ACR_L%
-          )
-        '''
-      }
-    }
+      docker push %FRONT_IMG_ACR%
+      IF ERRORLEVEL 1 exit /b 1
+
+      IF "%PUSH_LATEST%"=="true" (
+        docker tag %FRONT_IMG_LOCAL_L% %FRONT_IMG_ACR_L%
+        IF ERRORLEVEL 1 exit /b 1
+        docker push %FRONT_IMG_ACR_L%
+        IF ERRORLEVEL 1 exit /b 1
+      )
+
+      az acr repository show-tags -n %AZ_ACR_NAME% --repository %FRONT_APP_NAME% -o table
+    """
+  }
+}
+
 
     stage('Deploy Backend Web App') {
       steps {
