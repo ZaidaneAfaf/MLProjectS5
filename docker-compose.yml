@@ -6,6 +6,7 @@ services:
       context: ./serveur
       dockerfile: Dockerfile
     image: iris-serveur:latest
+    container_name: iris-serveur
     ports:
       - "8000:8000"
     volumes:
@@ -15,43 +16,63 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
     networks:
-      - iris-network
+      iris-network:
+        aliases:
+          - backend
+    # IMPORTANT : Ajouter un healthcheck
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # CRITIQUE : S'assurer que l'app écoute sur 0.0.0.0
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
 
   client:
     build:
       context: ./client
       dockerfile: Dockerfile
     image: iris-client:latest
+    container_name: iris-client
     ports:
       - "8501:8501"
     volumes:
       - ./client:/app
     depends_on:
       serveur:
-        condition: service_healthy
+        condition: service_healthy  # Attendre que le serveur soit sain
     environment:
       - PYTHONUNBUFFERED=1
-      - API_URL=http://serveur:8000
+      - API_URL=http://backend:8000
     networks:
       - iris-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   tensorboard:
     build:
       context: .
       dockerfile: Dockerfile.tensorboard
     image: iris-tensorboard:latest
+    container_name: iris-tensorboard
     ports:
       - "6006:6006"
     volumes:
       - ./artifacts/tensorboard:/tensorboard_logs
-    command: ["--logdir=/tensorboard_logs", "--host=0.0.0.0", "--port=6006", "--reload_interval=5"]
+    command: tensorboard --logdir=/tensorboard_logs --host=0.0.0.0 --port=6006 --reload_interval=5
     networks:
       - iris-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6006"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 networks:
   iris-network:
