@@ -73,8 +73,8 @@ pipeline {
                     dir logs\\tensorboard
                     echo.
                     echo Pour visualiser:
-                    echo tensorboard --logdir=logs/tensorboard --port=6007
-                    echo Puis ouvrir: http://localhost:6007
+                    echo tensorboard --logdir=logs/tensorboard --port=6006
+                    echo Puis ouvrir: http://localhost:6006
                     echo ==========================================
                 '''
             }
@@ -164,18 +164,8 @@ pipeline {
             steps {
                 echo 'Starting TensorBoard server...'
                 bat '''
-                    echo Stopping existing TensorBoard processes...
-                    taskkill /F /IM tensorboard.exe 2>nul || echo No TensorBoard running
-                    
-                    REM Libérer le port 6007
-                    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :6007 2^>nul') do (
-                        taskkill /F /PID %%a 2>nul
-                    )
-                    
-                    timeout /t 3 /nobreak >nul 2>&1
-                    
                     echo Launching TensorBoard in background...
-                    start /B /MIN cmd /c "tensorboard --logdir=logs/tensorboard --port=6007 --host=0.0.0.0 --reload_interval=5"
+                    start /B /MIN cmd /c "tensorboard --logdir=logs/tensorboard --port=6006 --host=0.0.0.0"
                     
                     timeout /t 5 /nobreak >nul 2>&1 || ping -n 5 127.0.0.1 >nul
                     
@@ -183,7 +173,7 @@ pipeline {
                     echo ==========================================
                     echo 📊 TENSORBOARD LANCÉ
                     echo ==========================================
-                    echo URL: http://localhost:6007
+                    echo URL: http://localhost:6006
                     echo ==========================================
                 '''
             }
@@ -214,7 +204,7 @@ pipeline {
                     }
                     
                     try {
-                        bat 'curl -f http://localhost:6007 --connect-timeout 5 --max-time 10'
+                        bat 'curl -f http://localhost:6006 --connect-timeout 5 --max-time 10'
                         tensorboardWorking = true
                         echo "✅ TensorBoard is responding"
                     } catch (Exception e) {
@@ -249,13 +239,13 @@ pipeline {
                 echo Port status:
                 netstat -an | findstr :8000 && echo "Port 8000 (API): IN USE" || echo "Port 8000 (API): FREE"
                 netstat -an | findstr :8501 && echo "Port 8501 (Streamlit): IN USE" || echo "Port 8501 (Streamlit): FREE"
-                netstat -an | findstr :6007 && echo "Port 6007 (TensorBoard): IN USE" || echo "Port 6007 (TensorBoard): FREE"
+                netstat -an | findstr :6006 && echo "Port 6006 (TensorBoard): IN USE" || echo "Port 6006 (TensorBoard): FREE"
                 echo.
                 echo Your application should be available at:
                 echo  - Streamlit UI: http://localhost:8501
                 echo  - FastAPI: http://localhost:8000
                 echo  - API Docs: http://localhost:8000/docs
-                echo  - TensorBoard: http://localhost:6007
+                echo  - TensorBoard: http://localhost:6006
                 echo ===============================
             '''
         }
@@ -275,7 +265,7 @@ pipeline {
                 echo  - Main App: http://localhost:8501  
                 echo  - API: http://localhost:8000
                 echo  - Docs: http://localhost:8000/docs
-                echo  - TensorBoard: http://localhost:6007
+                echo  - TensorBoard: http://localhost:6006
                 echo.
                 echo 📊 TensorBoard Features:
                 echo  - CPU/RAM usage par modèle
@@ -306,7 +296,7 @@ pipeline {
                 echo Please check manually:
                 echo  - http://localhost:8501
                 echo  - http://localhost:8000
-                echo  - http://localhost:6007
+                echo  - http://localhost:6006
                 echo =========================================
             '''
         }
