@@ -3,14 +3,14 @@ from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import joblib
 import os
 import json
 import psutil
 import threading
 import time
-from datetime import datetime
+import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 import shutil
 
@@ -87,6 +87,61 @@ class ResourceMonitor:
             'mem_gb': sum(self.memory_mb)/len(self.memory_mb) if self.memory_mb else 0
         }
 
+# Fonction pour entraîner progressivement et logger les métriques
+def train_with_logging(model, X_train, y_train, X_test, y_test, model_name, writer, n_steps=20):
+    """
+    Entraîne le modèle progressivement en augmentant la taille du dataset
+    et log les métriques à chaque étape pour créer des courbes
+    """
+    print(f"🔄 Entraînement progressif de {model_name}...")
+    
+    # Créer des subsets progressifs du dataset d'entraînement
+    train_sizes = np.linspace(0.1, 1.0, n_steps)
+    
+    for step, size in enumerate(train_sizes):
+        # Sélectionner un subset du training set
+        n_samples = max(10, int(len(X_train) * size))
+        X_subset = X_train[:n_samples]
+        y_subset = y_train[:n_samples]
+        
+        # Entraîner le modèle sur ce subset
+        model.fit(X_subset, y_subset)
+        
+        # Prédire sur le test set
+        y_pred = model.predict(X_test)
+        
+        # Calculer les métriques
+        accuracy = accuracy_score(y_test, y_pred)
+        precision = precision_score(y_test, y_pred, average='weighted', zero_division=0)
+        recall = recall_score(y_test, y_pred, average='weighted', zero_division=0)
+        f1 = f1_score(y_test, y_pred, average='weighted', zero_division=0)
+        
+        # Logger dans TensorBoard
+        writer.add_scalar(f'metrics/accuracy/{model_name}', accuracy, step)
+        writer.add_scalar(f'metrics/precision/{model_name}', precision, step)
+        writer.add_scalar(f'metrics/recall/{model_name}', recall, step)
+        writer.add_scalar(f'metrics/f1_score/{model_name}', f1, step)
+        
+        # Logger aussi pour la comparaison
+        writer.add_scalars('comparison/accuracy', {model_name: accuracy}, step)
+        writer.add_scalars('comparison/precision', {model_name: precision}, step)
+        writer.add_scalars('comparison/recall', {model_name: recall}, step)
+        writer.add_scalars('comparison/f1_score', {model_name: f1}, step)
+        
+        # Afficher la progression
+        if (step + 1) % 5 == 0 or step == n_steps - 1:
+            print(f"  Step {step+1}/{n_steps} ({int(size*100)}% données) - "
+                  f"Acc: {accuracy:.3f}, Prec: {precision:.3f}, "
+                  f"Rec: {recall:.3f}, F1: {f1:.3f}")
+    
+    # Retourner les métriques finales
+    return {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1_score': f1
+    }
+
 # 1. Chargement des données
 iris = pd.read_csv(DATA_PATH)
 
@@ -118,6 +173,10 @@ X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.3, random_state=42, stratify=y
 )
 
+# Convertir en numpy arrays pour faciliter le slicing
+X_train = X_train.values
+y_train = y_train.values
+
 # 5. Sauvegarde du X_test et y_test
 TEST_DATA_PATH = os.path.join(BASE_DIR, "..", "data", "iris_test.json")
 
@@ -146,10 +205,10 @@ metrics_stats = {}
 writer = SummaryWriter(log_dir=LOGS_DIR)
 
 print("\n" + "="*70)
-print("💻 CONSOMMATION CPU/RAM PAR MODÈLE")
+print("💻 ENTRAÎNEMENT PROGRESSIF AVEC COURBES")
 print("="*70)
 
-# 7. Entraînement et évaluation avec monitoring
+# 7. Entraînement et évaluation avec monitoring ET courbes
 for idx, (name, model) in enumerate(models.items()):
     print(f"\n🚀 Entraînement du modèle: {name}")
     
@@ -157,57 +216,32 @@ for idx, (name, model) in enumerate(models.items()):
     monitor = ResourceMonitor(name)
     monitor.start()
     
-    # Entraînement
-    model.fit(X_train, y_train)
+    # Entraînement progressif avec logging des métriques
+    final_metrics = train_with_logging(model, X_train, y_train, X_test, y_test, name, writer, n_steps=20)
     
     # Arrêter le monitoring
     stats = monitor.stop()
     resources_stats[name] = stats
     
-    # Évaluation avec métriques détaillées
-    y_pred = model.predict(X_test)
+    # Sauvegarder les métriques finales
+    results[name] = final_metrics['accuracy']
+    metrics_stats[name] = final_metrics
     
-    # Calcul des métriques
-    accuracy = accuracy_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred, average='weighted', zero_division=0)
-    recall = recall_score(y_test, y_pred, average='weighted', zero_division=0)
-    f1 = f1_score(y_test, y_pred, average='weighted', zero_division=0)
+    print(f"✅ {name} - Métriques finales:")
+    print(f"   Accuracy:  {final_metrics['accuracy']:.3f}")
+    print(f"   Precision: {final_metrics['precision']:.3f}")
+    print(f"   Recall:    {final_metrics['recall']:.3f}")
+    print(f"   F1-Score:  {final_metrics['f1_score']:.3f}")
     
-    results[name] = accuracy
-    metrics_stats[name] = {
-        'accuracy': accuracy,
-        'precision': precision,
-        'recall': recall,
-        'f1_score': f1
-    }
-    
-    print(f"✅ {name} Metrics:")
-    print(f"   Accuracy:  {accuracy:.3f}")
-    print(f"   Precision: {precision:.3f}")
-    print(f"   Recall:    {recall:.3f}")
-    print(f"   F1-Score:  {f1:.3f}")
-    
-    # 📊 Écriture dans TensorBoard - Métriques de performance
-    writer.add_scalar(f'metrics/accuracy/{name}', accuracy, 0)
-    writer.add_scalar(f'metrics/precision/{name}', precision, 0)
-    writer.add_scalar(f'metrics/recall/{name}', recall, 0)
-    writer.add_scalar(f'metrics/f1_score/{name}', f1, 0)
-    
-    # Comparaison groupée des métriques
-    writer.add_scalars('comparison/accuracy', {name: accuracy}, 0)
-    writer.add_scalars('comparison/precision', {name: precision}, 0)
-    writer.add_scalars('comparison/recall', {name: recall}, 0)
-    writer.add_scalars('comparison/f1_score', {name: f1}, 0)
-    
-    # 📊 Résumé texte pour chaque modèle (avec métriques)
+    # 📊 Résumé texte pour chaque modèle
     text_summary = f"""
 **RÉSUMÉ COMPLET - {name.upper()}**
 
-**MÉTRIQUES DE PERFORMANCE:**
-- **Accuracy:** {accuracy:.3f}
-- **Precision:** {precision:.3f}
-- **Recall:** {recall:.3f}
-- **F1-Score:** {f1:.3f}
+**MÉTRIQUES DE PERFORMANCE FINALES:**
+- **Accuracy:** {final_metrics['accuracy']:.3f}
+- **Precision:** {final_metrics['precision']:.3f}
+- **Recall:** {final_metrics['recall']:.3f}
+- **F1-Score:** {final_metrics['f1_score']:.3f}
 
 **RESSOURCES CONSOMMÉES:**
 - **Durée monitoring:** {stats['duration']:.0f} secondes
@@ -217,15 +251,15 @@ for idx, (name, model) in enumerate(models.items()):
 """
     writer.add_text(f'model_resumes/{name}', text_summary, 0)
     
-    # Métriques scalaires ressources (déjà présentes)
-    writer.add_scalar(f'cpu/mean/{name}', stats['cpu_mean'], 0)
-    writer.add_scalar(f'cpu/max/{name}', stats['cpu_max'], 0)
-    writer.add_scalar(f'memory/mean/{name}', stats['mem_mean'], 0)
-    writer.add_scalar(f'memory/max/{name}', stats['mem_max'], 0)
-    writer.add_scalar(f'memory/gb/{name}', stats['mem_gb'], 0)
-    writer.add_scalar(f'duration/{name}', stats['duration'], 0)
+    # Métriques scalaires ressources
+    writer.add_scalar(f'resources/cpu_mean/{name}', stats['cpu_mean'], 0)
+    writer.add_scalar(f'resources/cpu_max/{name}', stats['cpu_max'], 0)
+    writer.add_scalar(f'resources/memory_mean/{name}', stats['mem_mean'], 0)
+    writer.add_scalar(f'resources/memory_max/{name}', stats['mem_max'], 0)
+    writer.add_scalar(f'resources/memory_gb/{name}', stats['mem_gb'], 0)
+    writer.add_scalar(f'resources/duration/{name}', stats['duration'], 0)
     
-    # Test rapide
+    # Test rapide avec le modèle final
     test_data_sample = X_test.iloc[0:1]
     pred = model.predict(test_data_sample)[0]
     proba = model.predict_proba(test_data_sample).max()
@@ -234,7 +268,7 @@ for idx, (name, model) in enumerate(models.items()):
     print(f"Input: {test_data_sample.values}")
     print(f"Prédiction: {pred}, Confiance: {proba:.3f}")
 
-    # Sauvegarde du modèle
+    # Sauvegarde du modèle final
     joblib.dump(model, os.path.join(MODELS_DIR, f"{name}_iris_model.pkl"))
     print(f"💾 Modèle sauvegardé: {os.path.join(MODELS_DIR, f'{name}_iris_model.pkl')}")
 
@@ -264,7 +298,7 @@ for name in models.keys():
 
 writer.add_text('0_RESUME_GLOBAL', global_summary, 0)
 
-# Comparaisons scalaires (ressources - déjà présentes)
+# Comparaisons scalaires ressources
 for name in models.keys():
     writer.add_scalars('comparison/cpu_mean', {name: resources_stats[name]['cpu_mean']}, 0)
     writer.add_scalars('comparison/memory_mean', {name: resources_stats[name]['mem_mean']}, 0)
@@ -301,17 +335,16 @@ for name in models.keys():
 print("\n" + "="*70)
 print(f"📊 TensorBoard logs sauvegardés dans: {LOGS_DIR}")
 print("🚀 Pour visualiser: tensorboard --logdir=" + LOGS_DIR)
-print("\n📋 GUIDE TENSORBOARD - Où trouver les informations:")
+print("\n📋 GUIDE TENSORBOARD - Où trouver les COURBES:")
 print("  1. Onglet TEXT:")
-print("     - Cherchez '0_RESUME_GLOBAL' pour le résumé complet")
-print("     - Cherchez 'model_resumes/' pour chaque modèle")
-print("  2. Onglet SCALARS:")
-print("     - 'metrics/accuracy/' : Précision par modèle")
-print("     - 'metrics/precision/' : Precision par modèle")
-print("     - 'metrics/recall/' : Recall par modèle")
-print("     - 'metrics/f1_score/' : F1-Score par modèle")
-print("     - 'comparison/' : Comparaisons entre modèles (toutes métriques)")
-print("     - 'cpu/' : Consommation CPU")
-print("     - 'memory/' : Utilisation mémoire")
-print("  3. Utilisez la barre de recherche pour filtrer")
+print("     - '0_RESUME_GLOBAL' : Résumé complet de tous les modèles")
+print("     - 'model_resumes/' : Résumé individuel par modèle")
+print("  2. Onglet SCALARS (COURBES D'ENTRAÎNEMENT):")
+print("     - 'metrics/accuracy/' : Courbes d'accuracy par modèle (20 points)")
+print("     - 'metrics/precision/' : Courbes de precision par modèle (20 points)")
+print("     - 'metrics/recall/' : Courbes de recall par modèle (20 points)")
+print("     - 'metrics/f1_score/' : Courbes de F1-score par modèle (20 points)")
+print("     - 'comparison/' : Comparaisons directes entre modèles")
+print("     - 'resources/' : Consommation CPU/RAM")
+print("  3. Vous verrez maintenant de VRAIES COURBES au lieu de points isolés!")
 print("="*70)
