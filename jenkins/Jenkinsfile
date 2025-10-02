@@ -274,16 +274,16 @@ pipeline {
     }
     success {
       echo '🎉 SUCCESS'
-      bat '''
-        if exist webapp_fqdn.txt (
-          set /p FQDN=<webapp_fqdn.txt
-          for /f "tokens=* delims= " %%a in ("%FQDN%") do set FQDN=%%a
-          echo Open:   http://%FQDN%/
-          echo Root:   http://%FQDN%/
-          echo Predict ^(POST^): http://%FQDN%/predict
-        ) else (
-          echo FQDN not found (open Azure portal).
-        )
+      powershell '''
+        if (Test-Path "webapp_fqdn.txt") {
+          $fqdn = (Get-Content "webapp_fqdn.txt" | Select-Object -First 1).Trim()
+          Write-Host "Open:   http://$fqdn/"
+          Write-Host "Root:   http://$fqdn/"
+          Write-Host "Predict (POST): http://$fqdn/predict"
+        } else {
+          Write-Host "FQDN not found (open Azure portal)."
+        }
+        exit 0
       '''
     }
     failure {
