@@ -80,47 +80,9 @@ st.markdown(
 
     .main-title {
         text-align:center;
-        color:#333 !important;
+        color:#333;
         font-size: 30px;
         margin-bottom: 20px;
-    }
-
-    /* Force TOUT le texte en noir avec priorité maximale */
-    * {
-        color: #333 !important;
-    }
-    
-    h1, h2, h3, h4, h5, h6 {
-        color: #333 !important;
-    }
-    
-    p, span, div, li, ul, ol {
-        color: #333 !important;
-    }
-    
-    .stMarkdown {
-        color: #333 !important;
-    }
-    
-    .centered-content h2 {
-        color: #333 !important;
-    }
-    
-    .centered-content p {
-        color: #666 !important;
-    }
-    
-    .centered-content li {
-        color: #444 !important;
-    }
-
-    .centered-content b {
-        color: #FF6F61 !important;
-    }
-    
-    /* Boutons restent blancs */
-    .stButton>button, .stButton>button * {
-        color: white !important;
     }
     </style>
     """,
@@ -136,17 +98,17 @@ st.markdown(
     """
     <div class="centered-content">
         <div class="flower-emoji">🌺</div>
-        <h2>Bienvenue sur votre application</h2>
-        <p style='font-size: 18px; max-width: 700px;'>
+        <h2 style='color: #333; margin-bottom: 20px;'>Bienvenue sur votre application</h2>
+        <p style='font-size: 18px; color: #666; max-width: 700px;'>
         Cette plateforme vous permet de :
         </p>
-        <ul style='font-size: 18px; text-align:left; max-width:700px; margin:0 auto; list-style-position: inside;'>
+        <ul style='font-size: 18px; color: #444; text-align:left; max-width:700px; margin:0 auto;'>
             <li>🌼 <b>Prédire</b> l'espèce d'une fleur d'iris à partir de ses mesures.</li>
             <li>⚙️ <b>Gérer</b> vos modèles de Machine Learning (ajout, suppression, liste).</li>
             <li>📊 <b>Comparer</b> différents modèles et leurs performances.</li>
         </ul>
-        <p style='font-size: 16px; margin-top:20px;'>
-        Utilisez le menu latéral pour naviguer entre les sections : Observation, Gestion et Comparaison.
+        <p style='font-size: 16px; color: #777; margin-top:20px;'>
+        Utilisez le menu latéral pour naviguer entre les sections :Observation , Gestion et Comparaison.
         </p>
     </div>
     """,
