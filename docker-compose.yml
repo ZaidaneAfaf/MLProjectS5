@@ -38,14 +38,11 @@ services:
       - iris-network
 
   tensorboard:
-    build:
-      context: .
-      dockerfile: Dockerfile.tensorboard
-    image: iris-tensorboard:latest
+    image: tensorflow/tensorflow:latest
     ports:
       - "6006:6006"
     volumes:
-      - ./serveur/logs/tensorboard:/tensorboard_logs:ro  # Lecture seule, chemin corrigé
+      - ./serveur/logs/tensorboard:/tensorboard_logs:ro
     command: tensorboard --logdir=/tensorboard_logs --host=0.0.0.0 --port=6006 --reload_interval=5 --bind_all
     networks:
       - iris-network

@@ -1,10 +1,10 @@
 FROM python:3.9-slim
 
-# Installer TensorBoard et dépendances
+# Installer TensorBoard avec NumPy compatible
 RUN pip install --no-cache-dir \
     tensorboard==2.15.1 \
     protobuf==3.20.3 \
-    "numpy<2.0"
+    numpy==1.26.4
 
 # Créer le répertoire des logs
 RUN mkdir -p /tensorboard_logs
@@ -15,5 +15,5 @@ EXPOSE 6006
 # Point d'entrée par défaut
 ENTRYPOINT ["tensorboard"]
 
-# Arguments par défaut (peuvent être overridés dans docker-compose)
+# Arguments par défaut
 CMD ["--logdir=/tensorboard_logs", "--host=0.0.0.0", "--port=6006"]
