@@ -15,9 +15,12 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
     networks:
-      iris-network:
-        aliases:
-          - backend  # AJOUTEZ CETTE LIGNE
+      - iris-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   client:
     build:
@@ -29,10 +32,11 @@ services:
     volumes:
       - ./client:/app
     depends_on:
-      - serveur
+      serveur:
+        condition: service_healthy
     environment:
       - PYTHONUNBUFFERED=1
-      - API_URL=http://backend:8000  # Maintenant "backend" fonctionnera
+      - API_URL=http://serveur:8000
     networks:
       - iris-network
 
@@ -45,7 +49,7 @@ services:
       - "6006:6006"
     volumes:
       - ./artifacts/tensorboard:/tensorboard_logs
-    command: tensorboard --logdir=/tensorboard_logs --host=0.0.0.0 --port=6006 --reload_interval=5
+    command: ["--logdir=/tensorboard_logs", "--host=0.0.0.0", "--port=6006", "--reload_interval=5"]
     networks:
       - iris-network
 
