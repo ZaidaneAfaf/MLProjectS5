@@ -3,25 +3,29 @@ version: "3.8"
 services:
   backend:
     build:
-      context: ./serveur
-      dockerfile: Dockerfile        # écoute 80 dans le conteneur
+      context: .                # on build depuis la racine (où il y a serveur/ et models/)
+      dockerfile: serveur/Dockerfile
+    container_name: iris-backend
     ports:
-      - "8000:80"                   # host:container
+      - "8000:80"               # host:container (FastAPI expose 80 dans le conteneur)
     environment:
       - PYTHONUNBUFFERED=1
-    networks: [app]
+    networks:
+      - app
 
   frontend:
     build:
-      context: ./client
-      dockerfile: Dockerfile        # écoute 8501 dans le conteneur
+      context: ./client         # front dans le dossier client
+      dockerfile: Dockerfile
+    container_name: iris-frontend
     ports:
-      - "8502:8501"                 # http://localhost:8502
+      - "8502:8501"             # http://localhost:8502
     environment:
-      - API_URL=http://backend:80   # appel API via le réseau Docker
+      - BACKEND_URL=http://backend:80   # variable cohérente avec ton app.py
     depends_on:
       - backend
-    networks: [app]
+    networks:
+      - app
 
 networks:
   app:
